@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarSeries,
   ColorType,
@@ -40,6 +40,7 @@ interface Props {
   onDeleteAlert: (id: number) => void;
   onDeleteRiskReward: (id: number) => void;
   onUsePriceLevel: (price: number) => void;
+  onLivePrice?: (price: number) => void;
 }
 
 type RrDraft = { entry?: number; stop?: number; startTime?: number };
@@ -52,6 +53,9 @@ type PriceDrag = {
   startY: number;
   moved: boolean;
 };
+type WsState = 'connecting' | 'live' | 'reconnecting' | 'offline';
+
+const FUTURE_BARS = 24;
 
 const timeframeSeconds = (timeframe: string) => {
   if (timeframe === 'D') return 86_400;
@@ -59,10 +63,62 @@ const timeframeSeconds = (timeframe: string) => {
   return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 : 900;
 };
 
+const intervalBucket = (unixSeconds: number, timeframe: string) => {
+  const step = timeframeSeconds(timeframe);
+  return Math.floor(unixSeconds / step) * step;
+};
+
+function candleTimeAtLogical(candles: Candle[], logical: number, fallbackStep: number) {
+  if (!candles.length) return intervalBucket(Date.now() / 1000, String(fallbackStep / 60));
+  if (candles.length === 1) return Math.round(candles[0]!.time + logical * fallbackStep);
+
+  if (logical <= 0) {
+    return Math.round(candles[0]!.time + logical * fallbackStep);
+  }
+
+  const lastIndex = candles.length - 1;
+  if (logical >= lastIndex) {
+    return Math.round(candles[lastIndex]!.time + (logical - lastIndex) * fallbackStep);
+  }
+
+  const base = Math.floor(logical);
+  const fraction = logical - base;
+  const a = candles[base]!;
+  const b = candles[Math.min(lastIndex, base + 1)]!;
+  const span = Math.max(1, b.time - a.time);
+  return Math.round(a.time + span * fraction);
+}
+
+function logicalAtTime(candles: Candle[], time: number, fallbackStep: number) {
+  if (!candles.length) return 0;
+  if (candles.length === 1) return (time - candles[0]!.time) / fallbackStep;
+
+  if (time <= candles[0]!.time) return (time - candles[0]!.time) / fallbackStep;
+
+  const lastIndex = candles.length - 1;
+  if (time >= candles[lastIndex]!.time) {
+    return lastIndex + (time - candles[lastIndex]!.time) / fallbackStep;
+  }
+
+  let lo = 0;
+  let hi = lastIndex;
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (candles[mid]!.time <= time) lo = mid;
+    else hi = mid;
+  }
+  const a = candles[lo]!;
+  const b = candles[hi]!;
+  return lo + (time - a.time) / Math.max(1, b.time - a.time);
+}
+
 export default function TradingChart(p: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [chart, setChart] = useState<IChartApi | null>(null);
   const [series, setSeries] = useState<ISeriesApi<'Bar'> | null>(null);
+  const [timelineCandles, setTimelineCandles] = useState<Candle[]>(p.candles);
+  const timelineCandlesRef = useRef<Candle[]>(p.candles);
+  const lastLiveCandleRef = useRef<Candle | null>(p.candles.at(-1) || null);
   const lines = useRef<IPriceLine[]>([]);
   const manualLineMap = useRef(new Map<number, IPriceLine>());
   const alertLineMap = useRef(new Map<number, IPriceLine>());
@@ -71,31 +127,59 @@ export default function TradingChart(p: Props) {
   const onCreateLevelRef = useRef(p.onCreateLevel);
   const onCreateAlertRef = useRef(p.onCreateAlert);
   const onCreateRiskRewardRef = useRef(p.onCreateRiskReward);
+  const onLivePriceRef = useRef(p.onLivePrice);
   const [rrDraft, setRrDraft] = useState<RrDraft>({});
   const rrDraftRef = useRef<RrDraft>({});
   const [rrHover, setRrHover] = useState<RrHover>(null);
   const [priceDrag, setPriceDrag] = useState<PriceDrag | null>(null);
   const priceDragRef = useRef<PriceDrag | null>(null);
   const [overlayVersion, setOverlayVersion] = useState(0);
+  const [wsState, setWsState] = useState<WsState>('connecting');
+  const [isAtLiveEdge, setIsAtLiveEdge] = useState(true);
+  const followLiveRef = useRef(true);
+  const latestLogicalRef = useRef(Math.max(0, p.candles.length - 1));
+  const lastPriceReportAtRef = useRef(0);
 
   toolRef.current = p.tool;
   timeframeRef.current = p.timeframe;
   onCreateLevelRef.current = p.onCreateLevel;
   onCreateAlertRef.current = p.onCreateAlert;
   onCreateRiskRewardRef.current = p.onCreateRiskReward;
+  onLivePriceRef.current = p.onLivePrice;
   rrDraftRef.current = rrDraft;
   priceDragRef.current = priceDrag;
+  timelineCandlesRef.current = timelineCandles;
+
+  useEffect(() => {
+    const next = p.candles;
+    setTimelineCandles(next);
+    timelineCandlesRef.current = next;
+    lastLiveCandleRef.current = next.at(-1) || null;
+    latestLogicalRef.current = Math.max(0, next.length - 1);
+  }, [p.candles, p.symbol, p.timeframe]);
 
   useEffect(() => {
     if (!hostRef.current) return;
 
     const c = createChart(hostRef.current, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: '#0a0f16' }, textColor: '#6f7f94' },
+      layout: {
+        background: { type: ColorType.Solid, color: '#0a0f16' },
+        textColor: '#6f7f94',
+      },
       grid: { vertLines: { color: '#111a25' }, horzLines: { color: '#111a25' } },
       rightPriceScale: { borderColor: '#202b3a' },
-      timeScale: { borderColor: '#202b3a', timeVisible: true, secondsVisible: false },
-      crosshair: { vertLine: { color: '#60708755' }, horzLine: { color: '#60708755' } },
+      timeScale: {
+        borderColor: '#202b3a',
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: FUTURE_BARS,
+        shiftVisibleRangeOnNewBar: false,
+      },
+      crosshair: {
+        vertLine: { color: '#60708755' },
+        horzLine: { color: '#60708755' },
+      },
     });
 
     const s = c.addSeries(BarSeries, {
@@ -108,11 +192,24 @@ export default function TradingChart(p: Props) {
     setChart(c);
     setSeries(s);
 
+    const xToTime = (x: number) => {
+      const logical = (c.timeScale() as any).coordinateToLogical(x) as number | null;
+      if (logical === null || !Number.isFinite(logical)) return null;
+      return candleTimeAtLogical(
+        timelineCandlesRef.current,
+        logical,
+        timeframeSeconds(timeframeRef.current),
+      );
+    };
+
     const pointData = (param: any) => {
-      if (!param?.point || !param?.time) return null;
+      if (!param?.point) return null;
       const price = s.coordinateToPrice(param.point.y);
       if (!price || price <= 0) return null;
-      const time = typeof param.time === 'number' ? param.time : Math.floor(Date.now() / 1000);
+      const time =
+        typeof param.time === 'number'
+          ? param.time
+          : xToTime(param.point.x) ?? intervalBucket(Date.now() / 1000, timeframeRef.current);
       return { price, time };
     };
 
@@ -121,8 +218,6 @@ export default function TradingChart(p: Props) {
       if (!point) return;
       const { price, time } = point;
 
-      // Level and Alert are deliberately one-shot tools: one chart click creates
-      // the object; ChartPage switches the toolbar back to Select after success.
       if (toolRef.current === 'level') {
         onCreateLevelRef.current(price);
         return;
@@ -188,7 +283,14 @@ export default function TradingChart(p: Props) {
 
   useEffect(() => {
     if (!chart || !hostRef.current) return;
-    const refresh = () => setOverlayVersion((value) => value + 1);
+    const refresh = () => {
+      setOverlayVersion((value) => value + 1);
+      const range = chart.timeScale().getVisibleLogicalRange();
+      if (!range) return;
+      const atEdge = range.to >= latestLogicalRef.current - 0.5;
+      followLiveRef.current = atEdge;
+      setIsAtLiveEdge(atEdge);
+    };
     chart.timeScale().subscribeVisibleTimeRangeChange(refresh);
     chart.timeScale().subscribeVisibleLogicalRangeChange(refresh);
     const observer = new ResizeObserver(refresh);
@@ -201,8 +303,165 @@ export default function TradingChart(p: Props) {
   }, [chart]);
 
   useEffect(() => {
-    series?.setData(p.candles.map((c) => ({ ...c, time: c.time as UTCTimestamp })));
-  }, [series, p.candles]);
+    if (!series) return;
+    series.setData(p.candles.map((c) => ({ ...c, time: c.time as UTCTimestamp })));
+    const last = p.candles.at(-1) || null;
+    lastLiveCandleRef.current = last;
+    latestLogicalRef.current = Math.max(0, p.candles.length - 1);
+  }, [series, p.candles, p.symbol, p.timeframe]);
+
+  useEffect(() => {
+    if (!series || !chart || !p.symbol || !p.timeframe) return;
+
+    let stopped = false;
+    let socket: WebSocket | null = null;
+    let pingTimer: number | null = null;
+    let reconnectTimer: number | null = null;
+    let reconnectDelay = 1_000;
+    const topicKline = `kline.${p.timeframe}.${p.symbol}`;
+    const topicTicker = `tickers.${p.symbol}`;
+
+    const reportLivePrice = (price: number, force = false) => {
+      const now = Date.now();
+      if (force || now - lastPriceReportAtRef.current >= 150) {
+        lastPriceReportAtRef.current = now;
+        reportLivePrice(price);
+      }
+    };
+
+    const updateTimelineForNewBar = (bar: Candle) => {
+      const current = timelineCandlesRef.current;
+      const last = current.at(-1);
+      if (!last || bar.time > last.time) {
+        const next = [...current, bar].slice(-1000);
+        timelineCandlesRef.current = next;
+        setTimelineCandles(next);
+        latestLogicalRef.current = Math.max(0, next.length - 1);
+      }
+    };
+
+    const applyBar = (bar: Candle, newBar = false) => {
+      lastLiveCandleRef.current = bar;
+      series.update({ ...bar, time: bar.time as UTCTimestamp });
+      reportLivePrice(bar.close);
+      if (newBar) updateTimelineForNewBar(bar);
+      if (newBar && followLiveRef.current) {
+        chart.timeScale().applyOptions({ rightOffset: FUTURE_BARS });
+        chart.timeScale().scrollToRealTime();
+      }
+    };
+
+    const applyTicker = (price: number, timestampMs?: number) => {
+      if (!Number.isFinite(price) || price <= 0) return;
+      reportLivePrice(price);
+      const nowSeconds = Math.floor((timestampMs || Date.now()) / 1000);
+      const bucket = intervalBucket(nowSeconds, p.timeframe);
+      const previous = lastLiveCandleRef.current;
+
+      if (!previous || bucket > previous.time) {
+        const open = previous?.close || price;
+        applyBar(
+          {
+            time: bucket,
+            open,
+            high: Math.max(open, price),
+            low: Math.min(open, price),
+            close: price,
+            volume: 0,
+          },
+          true,
+        );
+        return;
+      }
+
+      if (bucket === previous.time) {
+        applyBar({
+          ...previous,
+          high: Math.max(previous.high, price),
+          low: Math.min(previous.low, price),
+          close: price,
+        });
+      }
+    };
+
+    const connect = () => {
+      if (stopped) return;
+      setWsState(reconnectDelay > 1_000 ? 'reconnecting' : 'connecting');
+      socket = new WebSocket('wss://stream.bybit.com/v5/public/linear');
+
+      socket.onopen = () => {
+        if (stopped || !socket) return;
+        reconnectDelay = 1_000;
+        setWsState('live');
+        socket.send(JSON.stringify({ op: 'subscribe', args: [topicKline, topicTicker] }));
+        if (pingTimer) window.clearInterval(pingTimer);
+        pingTimer = window.setInterval(() => {
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ op: 'ping' }));
+          }
+        }, 20_000);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(String(event.data));
+          if (message.topic === topicKline && Array.isArray(message.data)) {
+            const raw = message.data[0];
+            if (!raw) return;
+            const bar: Candle = {
+              time: Math.floor(Number(raw.start) / 1000),
+              open: Number(raw.open),
+              high: Number(raw.high),
+              low: Number(raw.low),
+              close: Number(raw.close),
+              volume: Number(raw.volume || 0),
+            };
+            const previous = lastLiveCandleRef.current;
+            applyBar(bar, !previous || bar.time > previous.time);
+            return;
+          }
+
+          if (message.topic === topicTicker && message.data) {
+            const raw = Array.isArray(message.data) ? message.data[0] : message.data;
+            const price = Number(raw?.lastPrice);
+            if (Number.isFinite(price) && price > 0) {
+              applyTicker(price, Number(message.ts || Date.now()));
+            }
+          }
+        } catch {
+          // Ignore malformed public WS packets; the next packet will repair state.
+        }
+      };
+
+      const scheduleReconnect = () => {
+        if (stopped) return;
+        setWsState('reconnecting');
+        if (pingTimer) {
+          window.clearInterval(pingTimer);
+          pingTimer = null;
+        }
+        if (reconnectTimer) window.clearTimeout(reconnectTimer);
+        reconnectTimer = window.setTimeout(connect, reconnectDelay);
+        reconnectDelay = Math.min(15_000, reconnectDelay * 2);
+      };
+
+      socket.onerror = () => socket?.close();
+      socket.onclose = scheduleReconnect;
+    };
+
+    connect();
+
+    return () => {
+      stopped = true;
+      setWsState('offline');
+      if (pingTimer) window.clearInterval(pingTimer);
+      if (reconnectTimer) window.clearTimeout(reconnectTimer);
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+      }
+    };
+  }, [series, chart, p.symbol, p.timeframe]);
 
   useEffect(() => {
     if (!series) return;
@@ -212,14 +471,21 @@ export default function TradingChart(p: Props) {
     alertLineMap.current.clear();
 
     for (const level of p.autoLevels) {
-      lines.current.push(series.createPriceLine({
-        price: level.price,
-        color: level.type === 'mirror' ? '#7387ff' : level.type === 'support' ? '#3a9b79' : '#b85b6c',
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: `${level.type} · ${level.touches}`,
-      }));
+      lines.current.push(
+        series.createPriceLine({
+          price: level.price,
+          color:
+            level.type === 'mirror'
+              ? '#7387ff'
+              : level.type === 'support'
+                ? '#3a9b79'
+                : '#b85b6c',
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: `${level.type} · ${level.touches}`,
+        }),
+      );
     }
 
     for (const level of p.manualLevels) {
@@ -250,7 +516,12 @@ export default function TradingChart(p: Props) {
   }, [series, p.autoLevels, p.manualLevels, p.alerts]);
 
   useEffect(() => {
-    if (chart && p.candles.length) chart.timeScale().fitContent();
+    if (!chart || !p.candles.length) return;
+    chart.timeScale().fitContent();
+    chart.timeScale().applyOptions({ rightOffset: FUTURE_BARS });
+    chart.timeScale().scrollToRealTime();
+    followLiveRef.current = true;
+    setIsAtLiveEdge(true);
   }, [chart, p.symbol, p.timeframe, p.candles.length]);
 
   useEffect(() => {
@@ -290,10 +561,17 @@ export default function TradingChart(p: Props) {
       const y = event.clientY - rect.top;
       const price = series.coordinateToPrice(y);
       if (!price || price <= 0) return;
-      const next = { ...current, price, moved: current.moved || Math.abs(y - current.startY) > 2 };
+      const next = {
+        ...current,
+        price,
+        moved: current.moved || Math.abs(y - current.startY) > 2,
+      };
       priceDragRef.current = next;
       setPriceDrag(next);
-      const line = next.kind === 'level' ? manualLineMap.current.get(next.id) : alertLineMap.current.get(next.id);
+      const line =
+        next.kind === 'level'
+          ? manualLineMap.current.get(next.id)
+          : alertLineMap.current.get(next.id);
       line?.applyOptions({ price });
     };
 
@@ -319,7 +597,12 @@ export default function TradingChart(p: Props) {
     };
   }, [priceDrag, series, p.onUpdateLevel, p.onUpdateAlert, p.onUsePriceLevel]);
 
-  const startPriceDrag = (kind: 'level' | 'alert', id: number, price: number, event: any) => {
+  const startPriceDrag = (
+    kind: 'level' | 'alert',
+    id: number,
+    price: number,
+    event: any,
+  ) => {
     if (p.tool !== 'select' || !hostRef.current) return;
     event.stopPropagation();
     event.preventDefault();
@@ -336,25 +619,60 @@ export default function TradingChart(p: Props) {
     setPriceDrag(next);
   };
 
-  const entryY = series && rrDraft.entry !== undefined ? series.priceToCoordinate(rrDraft.entry) : null;
-  const stopY = series && rrDraft.stop !== undefined ? series.priceToCoordinate(rrDraft.stop) : null;
+  const timeToCoordinate = (time: number) => {
+    if (!chart) return null;
+    const direct = chart.timeScale().timeToCoordinate(time as UTCTimestamp);
+    if (direct !== null) return direct;
+    const logical = logicalAtTime(
+      timelineCandlesRef.current,
+      time,
+      timeframeSeconds(p.timeframe),
+    );
+    return (chart.timeScale() as any).logicalToCoordinate(logical) as number | null;
+  };
+
+  const entryY =
+    series && rrDraft.entry !== undefined ? series.priceToCoordinate(rrDraft.entry) : null;
+  const stopY =
+    series && rrDraft.stop !== undefined ? series.priceToCoordinate(rrDraft.stop) : null;
   const hoverY = series && rrHover ? series.priceToCoordinate(rrHover.price) : null;
-  const draftX1 = chart && rrDraft.startTime !== undefined
-    ? chart.timeScale().timeToCoordinate(rrDraft.startTime as UTCTimestamp)
-    : null;
-  const draftX2 = chart && rrHover
-    ? chart.timeScale().timeToCoordinate(rrHover.time as UTCTimestamp)
-    : null;
+  const draftX1 =
+    rrDraft.startTime !== undefined ? timeToCoordinate(rrDraft.startTime) : null;
+  const draftX2 = rrHover ? timeToCoordinate(rrHover.time) : null;
+
+  const returnToLive = () => {
+    if (!chart) return;
+    chart.timeScale().applyOptions({ rightOffset: FUTURE_BARS });
+    chart.timeScale().scrollToRealTime();
+    followLiveRef.current = true;
+    setIsAtLiveEdge(true);
+  };
+
+  const liveLabel = useMemo(() => {
+    if (wsState === 'live') return isAtLiveEdge ? '● LIVE' : '↪ LIVE';
+    if (wsState === 'reconnecting') return '● RECONNECTING';
+    if (wsState === 'connecting') return '● CONNECTING';
+    return '● OFFLINE';
+  }, [wsState, isAtLiveEdge]);
 
   return (
     <div className={priceDrag ? 'chart-card drawing-dragging' : 'chart-card'}>
       <div ref={hostRef} className="chart-host" />
 
+      <button
+        type="button"
+        className={`chart-live-control ${wsState === 'live' ? 'connected' : ''} ${isAtLiveEdge ? '' : 'away'}`}
+        onClick={returnToLive}
+        title={isAtLiveEdge ? 'Live Bybit market data' : 'Return to current market'}
+      >
+        {liveLabel}
+      </button>
+
       <RiskRewardOverlay
         chart={chart}
         series={series}
         host={hostRef.current}
-        candles={p.candles}
+        candles={timelineCandles}
         items={p.riskRewards}
         selectedId={p.selectedRiskReward?.id ?? null}
         onSelect={p.onSelectRiskReward}
@@ -363,7 +681,12 @@ export default function TradingChart(p: Props) {
       />
 
       {series && hostRef.current && (
-        <svg className="chart-overlay level-actions-overlay" width={hostRef.current.clientWidth} height={hostRef.current.clientHeight} data-version={overlayVersion}>
+        <svg
+          className="chart-overlay level-actions-overlay"
+          width={hostRef.current.clientWidth}
+          height={hostRef.current.clientHeight}
+          data-version={overlayVersion}
+        >
           {p.autoLevels.map((level, index) => {
             const y = series.priceToCoordinate(level.price);
             if (y === null) return null;
@@ -375,7 +698,11 @@ export default function TradingChart(p: Props) {
                 width={hostRef.current!.clientWidth}
                 height="10"
                 fill="transparent"
-                className={p.tool === 'select' ? 'price-line-click-target active' : 'price-line-click-target'}
+                className={
+                  p.tool === 'select'
+                    ? 'price-line-click-target active'
+                    : 'price-line-click-target'
+                }
                 onPointerDown={(event) => {
                   if (p.tool !== 'select') return;
                   event.stopPropagation();
@@ -386,7 +713,10 @@ export default function TradingChart(p: Props) {
           })}
 
           {p.manualLevels.map((level) => {
-            const shownPrice = priceDrag?.kind === 'level' && priceDrag.id === level.id ? priceDrag.price : level.price;
+            const shownPrice =
+              priceDrag?.kind === 'level' && priceDrag.id === level.id
+                ? priceDrag.price
+                : level.price;
             const y = series.priceToCoordinate(shownPrice);
             if (y === null) return null;
             const x = Math.max(20, hostRef.current!.clientWidth - 82);
@@ -398,40 +728,73 @@ export default function TradingChart(p: Props) {
                   width={hostRef.current!.clientWidth}
                   height="14"
                   fill="transparent"
-                  className={p.tool === 'select' ? 'price-line-click-target active draggable' : 'price-line-click-target'}
-                  onPointerDown={(event) => startPriceDrag('level', level.id, level.price, event)}
+                  className={
+                    p.tool === 'select'
+                      ? 'price-line-click-target active draggable'
+                      : 'price-line-click-target'
+                  }
+                  onPointerDown={(event) =>
+                    startPriceDrag('level', level.id, level.price, event)
+                  }
                 />
-                <g className="drawing-delete" onPointerDown={(event) => { event.stopPropagation(); p.onDeleteLevel(level.id); }}>
+                <g
+                  className="drawing-delete"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    p.onDeleteLevel(level.id);
+                  }}
+                >
                   <circle cx={x} cy={y} r="8" />
-                  <text x={x} y={y + 3.5} textAnchor="middle">×</text>
+                  <text x={x} y={y + 3.5} textAnchor="middle">
+                    ×
+                  </text>
                 </g>
               </g>
             );
           })}
 
-          {p.alerts.filter((alert) => alert.active).map((alert) => {
-            const shownPrice = priceDrag?.kind === 'alert' && priceDrag.id === alert.id ? priceDrag.price : alert.price;
-            const y = series.priceToCoordinate(shownPrice);
-            if (y === null) return null;
-            const x = Math.max(20, hostRef.current!.clientWidth - 104);
-            return (
-              <g key={`alert-hit-${alert.id}`}>
-                <rect
-                  x="0"
-                  y={y - 7}
-                  width={hostRef.current!.clientWidth}
-                  height="14"
-                  fill="transparent"
-                  className={p.tool === 'select' ? 'price-line-click-target active draggable alert-hit' : 'price-line-click-target'}
-                  onPointerDown={(event) => startPriceDrag('alert', alert.id, alert.price, event)}
-                />
-                <g className="drawing-delete alert-delete" onPointerDown={(event) => { event.stopPropagation(); p.onDeleteAlert(alert.id); }}>
-                  <circle cx={x} cy={y} r="8" />
-                  <text x={x} y={y + 3.5} textAnchor="middle">×</text>
+          {p.alerts
+            .filter((alert) => alert.active)
+            .map((alert) => {
+              const shownPrice =
+                priceDrag?.kind === 'alert' && priceDrag.id === alert.id
+                  ? priceDrag.price
+                  : alert.price;
+              const y = series.priceToCoordinate(shownPrice);
+              if (y === null) return null;
+              const x = Math.max(20, hostRef.current!.clientWidth - 104);
+              return (
+                <g key={`alert-hit-${alert.id}`}>
+                  <rect
+                    x="0"
+                    y={y - 7}
+                    width={hostRef.current!.clientWidth}
+                    height="14"
+                    fill="transparent"
+                    className={
+                      p.tool === 'select'
+                        ? 'price-line-click-target active draggable alert-hit'
+                        : 'price-line-click-target'
+                    }
+                    onPointerDown={(event) =>
+                      startPriceDrag('alert', alert.id, alert.price, event)
+                    }
+                  />
+                  <g
+                    className="drawing-delete alert-delete"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      p.onDeleteAlert(alert.id);
+                    }}
+                  >
+                    <circle cx={x} cy={y} r="8" />
+                    <text x={x} y={y + 3.5} textAnchor="middle">
+                      ×
+                    </text>
+                  </g>
                 </g>
-              </g>
-            );
-          })}
+              );
+            })}
         </svg>
       )}
 
@@ -450,21 +813,43 @@ export default function TradingChart(p: Props) {
           {entryY !== null && <div className="rr-draft-line entry" style={{ top: entryY }} />}
           {stopY !== null && <div className="rr-draft-line stop" style={{ top: stopY }} />}
 
-          {rrDraft.stop !== undefined && rrHover && entryY !== null && stopY !== null && hoverY !== null && draftX1 !== null && draftX2 !== null && (
-            <svg className="chart-overlay rr-draft-overlay" width={hostRef.current?.clientWidth || 0} height={hostRef.current?.clientHeight || 0}>
-              {(() => {
-                const left = Math.min(draftX1, draftX2);
-                const right = Math.max(draftX1, draftX2);
-                const width = Math.max(24, right - left);
-                return (
-                  <>
-                    <rect className="rr-reward rr-draft-box" x={left} y={Math.min(entryY, hoverY)} width={width} height={Math.max(1, Math.abs(hoverY - entryY))} />
-                    <rect className="rr-risk rr-draft-box" x={left} y={Math.min(entryY, stopY)} width={width} height={Math.max(1, Math.abs(stopY - entryY))} />
-                  </>
-                );
-              })()}
-            </svg>
-          )}
+          {rrDraft.stop !== undefined &&
+            rrHover &&
+            entryY !== null &&
+            stopY !== null &&
+            hoverY !== null &&
+            draftX1 !== null &&
+            draftX2 !== null && (
+              <svg
+                className="chart-overlay rr-draft-overlay"
+                width={hostRef.current?.clientWidth || 0}
+                height={hostRef.current?.clientHeight || 0}
+              >
+                {(() => {
+                  const left = Math.min(draftX1, draftX2);
+                  const right = Math.max(draftX1, draftX2);
+                  const width = Math.max(24, right - left);
+                  return (
+                    <>
+                      <rect
+                        className="rr-reward rr-draft-box"
+                        x={left}
+                        y={Math.min(entryY, hoverY)}
+                        width={width}
+                        height={Math.max(1, Math.abs(hoverY - entryY))}
+                      />
+                      <rect
+                        className="rr-risk rr-draft-box"
+                        x={left}
+                        y={Math.min(entryY, stopY)}
+                        width={width}
+                        height={Math.max(1, Math.abs(stopY - entryY))}
+                      />
+                    </>
+                  );
+                })()}
+              </svg>
+            )}
         </>
       )}
     </div>

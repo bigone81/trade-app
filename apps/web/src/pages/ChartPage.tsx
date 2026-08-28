@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
@@ -38,6 +38,7 @@ export default function ChartPage() {
   const qc = useQueryClient();
   const ui = useUi();
   const [tickerSearch, setTickerSearch] = useState('');
+  const [livePrice, setLivePrice] = useState<number | null>(null);
 
   const config = useQuery<{
     accounts: AccountPublic[];
@@ -50,8 +51,8 @@ export default function ChartPage() {
   const tickers = useQuery<MarketTicker[]>({
     queryKey: ['tickers'],
     queryFn: () => api('/api/market/tickers'),
-    staleTime: 20_000,
-    refetchInterval: 30_000,
+    staleTime: 8_000,
+    refetchInterval: 10_000,
   });
 
   const candles = useQuery<Candle[]>({
@@ -60,7 +61,8 @@ export default function ChartPage() {
       api(
         `/api/market/candles?symbol=${ui.symbol}&interval=${ui.timeframe}&limit=1000`,
       ),
-    refetchInterval: 30_000,
+    staleTime: 300_000,
+    refetchInterval: 300_000,
   });
 
   const levels = useQuery<{
@@ -183,13 +185,20 @@ export default function ChartPage() {
     onSuccess: invalidate,
   });
 
+  useEffect(() => {
+    setLivePrice(null);
+  }, [ui.symbol]);
+
   const selectedTicker = useMemo(
     () => tickers.data?.find((ticker) => ticker.symbol === ui.symbol),
     [tickers.data, ui.symbol],
   );
 
   const currentPrice =
-    selectedTicker?.lastPrice || candles.data?.at(-1)?.close || 0;
+    livePrice || selectedTicker?.lastPrice || candles.data?.at(-1)?.close || 0;
+
+  const levelReferencePrice =
+    selectedTicker?.lastPrice || candles.data?.at(-1)?.close || currentPrice;
 
   const allAuto = useMemo(
     () => [
@@ -200,12 +209,13 @@ export default function ChartPage() {
   );
 
   const visibleAuto = useMemo(() => {
-    if (!currentPrice) return allAuto;
+    if (!levelReferencePrice) return allAuto;
     const tolerance = ui.levelTolerancePercent / 100;
     return allAuto.filter(
-      (level) => Math.abs(level.price - currentPrice) / currentPrice <= tolerance,
+      (level) =>
+        Math.abs(level.price - levelReferencePrice) / levelReferencePrice <= tolerance,
     );
-  }, [allAuto, currentPrice, ui.levelTolerancePercent]);
+  }, [allAuto, levelReferencePrice, ui.levelTolerancePercent]);
 
   const filteredTickers = useMemo(() => {
     const query = tickerSearch.trim().toUpperCase();
@@ -329,6 +339,7 @@ export default function ChartPage() {
           onDeleteAlert={(id) => delAlert.mutate(id)}
           onDeleteRiskReward={(id) => delRR.mutate(id)}
           onUsePriceLevel={(price) => ui.openCalculatorAtPrice(price)}
+          onLivePrice={(price) => setLivePrice(price)}
         />
 
         <aside className="market-panel card">
@@ -410,7 +421,7 @@ export default function ChartPage() {
                 >
                   <span className="ticker-symbol">
                     <strong>{ticker.symbol.replace(/USDT$/, '')}</strong>
-                    <small>{num(ticker.lastPrice, 6)}</small>
+                    <small>{num(ticker.symbol === ui.symbol && livePrice ? livePrice : ticker.lastPrice, 6)}</small>
                   </span>
                   <span className={change >= 0 ? 'positive' : 'negative'}>
                     {change >= 0 ? '+' : ''}{change.toFixed(2)}%

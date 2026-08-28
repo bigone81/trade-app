@@ -14,3 +14,7 @@
 
 /* Chart interactions v4 */
 .price-line-click-target.active.draggable{cursor:ns-resize}.drawing-dragging{cursor:ns-resize}.alert-hit{cursor:ns-resize}.rr-overlay{z-index:6}.rr-object{cursor:move}.rr-object.selected .rr-reward,.rr-object.selected .rr-risk{stroke-width:1.4}.rr-drag-line{stroke:transparent;stroke-width:12;pointer-events:all;cursor:ns-resize}.rr-handle{pointer-events:all}.rr-move-handle{fill:#8ea0b8;stroke:#0a0f16;stroke-width:2;cursor:move;pointer-events:all}.rr-draft-help{position:absolute;left:12px;top:12px;z-index:8;padding:7px 9px;background:#111a26ee;border:1px solid #293548;border-radius:8px;font-size:11px;color:#c2ccda;pointer-events:none}.rr-draft-help span{color:#718096;margin-left:8px}.rr-draft-line{position:absolute;left:0;right:0;z-index:7;pointer-events:none;border-top:1px dashed}.rr-draft-line.entry{border-color:#d9e0ea}.rr-draft-line.stop{border-color:#e46d7a}.rr-draft-overlay{z-index:6}.rr-draft-box{pointer-events:none;opacity:.7}
+
+/* Live chart + future whitespace v5 */
+.chart-live-control{position:absolute;right:12px;top:12px;z-index:11;border:1px solid #2a3647;border-radius:7px;background:#101823e8;color:#8a98aa;padding:6px 9px;font-size:9px;font-weight:800;letter-spacing:.06em;cursor:pointer;box-shadow:0 4px 18px #0005;backdrop-filter:blur(6px)}
+.chart-live-control.connected{color:#72d7a6;border-color:#275a46;background:#0f201aee}.chart-live-control.connected.away{color:#d8e1ed;border-color:#53647b;background:#172232ee}.chart-live-control:hover{filter:brightness(1.16)}
