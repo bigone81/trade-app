@@ -77,11 +77,11 @@ export default function ChartPage() {
   });
 
   const rr = useQuery<RiskReward[]>({
-    queryKey: ['rr', ui.symbol, ui.timeframe],
-    queryFn: () =>
-      api(
-        `/api/drawings/risk-rewards?symbol=${ui.symbol}&timeframe=${ui.timeframe}`,
-      ),
+    // R/R objects use absolute Unix timestamps, so the same object is visible
+    // on every timeframe. The timeframe stored on the record is only the
+    // timeframe on which it was originally drawn.
+    queryKey: ['rr', ui.symbol],
+    queryFn: () => api(`/api/drawings/risk-rewards?symbol=${ui.symbol}`),
   });
 
   const alerts = useQuery<AlertRecord[]>({
@@ -91,7 +91,7 @@ export default function ChartPage() {
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['manual-levels', ui.symbol] });
-    void qc.invalidateQueries({ queryKey: ['rr', ui.symbol, ui.timeframe] });
+    void qc.invalidateQueries({ queryKey: ['rr', ui.symbol] });
     void qc.invalidateQueries({ queryKey: ['alerts', ui.symbol] });
     void qc.invalidateQueries({ queryKey: ['alerts-all'] });
   };
@@ -111,6 +111,12 @@ export default function ChartPage() {
   const delLevel = useMutation({
     mutationFn: (id: number) =>
       api(`/api/drawings/levels/${id}`, { method: 'DELETE' }),
+    onSuccess: invalidate,
+  });
+
+  const updateLevel = useMutation({
+    mutationFn: ({ id, price }: { id: number; price: number }) =>
+      api<ManualLevel>(`/api/drawings/levels/${id}`, json('PATCH', { price })),
     onSuccess: invalidate,
   });
 
@@ -171,6 +177,12 @@ export default function ChartPage() {
     onSuccess: invalidate,
   });
 
+  const updateAlert = useMutation({
+    mutationFn: ({ id, price }: { id: number; price: number }) =>
+      api<AlertRecord>(`/api/alerts/${id}`, json('PATCH', { price })),
+    onSuccess: invalidate,
+  });
+
   const selectedTicker = useMemo(
     () => tickers.data?.find((ticker) => ticker.symbol === ui.symbol),
     [tickers.data, ui.symbol],
@@ -218,11 +230,13 @@ export default function ChartPage() {
   const mutationError = [
     addLevel.error,
     delLevel.error,
+    updateLevel.error,
     addRR.error,
     updateRR.error,
     delRR.error,
     addAlert.error,
     delAlert.error,
+    updateAlert.error,
   ].find(Boolean) as Error | undefined;
 
   const priceChange = (selectedTicker?.price24hPcnt || 0) * 100;
@@ -309,6 +323,8 @@ export default function ChartPage() {
           onCreateRiskReward={(input) => addRR.mutate(input)}
           onSelectRiskReward={(item) => ui.selectRiskReward(item)}
           onUpdateRiskReward={(id, patch) => updateRR.mutate({ id, patch })}
+          onUpdateLevel={(id, price) => updateLevel.mutate({ id, price })}
+          onUpdateAlert={(id, price) => updateAlert.mutate({ id, price })}
           onDeleteLevel={(id) => delLevel.mutate(id)}
           onDeleteAlert={(id) => delAlert.mutate(id)}
           onDeleteRiskReward={(id) => delRR.mutate(id)}

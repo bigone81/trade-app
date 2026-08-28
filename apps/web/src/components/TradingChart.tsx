@@ -31,21 +31,32 @@ interface Props {
   timeframe: string;
   onCreateLevel: (price: number) => void;
   onCreateAlert: (price: number) => void;
-  onCreateRiskReward: (
-    r: Omit<RiskReward, 'id' | 'createdAt' | 'updatedAt'>,
-  ) => void;
+  onCreateRiskReward: (r: Omit<RiskReward, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onSelectRiskReward: (r: RiskReward) => void;
   onUpdateRiskReward: (id: number, p: Partial<RiskReward>) => void;
+  onUpdateLevel: (id: number, price: number) => void;
+  onUpdateAlert: (id: number, price: number) => void;
   onDeleteLevel: (id: number) => void;
   onDeleteAlert: (id: number) => void;
   onDeleteRiskReward: (id: number) => void;
   onUsePriceLevel: (price: number) => void;
 }
 
-type RrDraft = {
-  entry?: number;
-  stop?: number;
-  startTime?: number;
+type RrDraft = { entry?: number; stop?: number; startTime?: number };
+type RrHover = { price: number; time: number } | null;
+type PriceDrag = {
+  kind: 'level' | 'alert';
+  id: number;
+  originalPrice: number;
+  price: number;
+  startY: number;
+  moved: boolean;
+};
+
+const timeframeSeconds = (timeframe: string) => {
+  if (timeframe === 'D') return 86_400;
+  const minutes = Number(timeframe);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 : 900;
 };
 
 export default function TradingChart(p: Props) {
@@ -53,12 +64,18 @@ export default function TradingChart(p: Props) {
   const [chart, setChart] = useState<IChartApi | null>(null);
   const [series, setSeries] = useState<ISeriesApi<'Bar'> | null>(null);
   const lines = useRef<IPriceLine[]>([]);
+  const manualLineMap = useRef(new Map<number, IPriceLine>());
+  const alertLineMap = useRef(new Map<number, IPriceLine>());
   const toolRef = useRef(p.tool);
   const timeframeRef = useRef(p.timeframe);
   const onCreateLevelRef = useRef(p.onCreateLevel);
   const onCreateAlertRef = useRef(p.onCreateAlert);
   const onCreateRiskRewardRef = useRef(p.onCreateRiskReward);
   const [rrDraft, setRrDraft] = useState<RrDraft>({});
+  const rrDraftRef = useRef<RrDraft>({});
+  const [rrHover, setRrHover] = useState<RrHover>(null);
+  const [priceDrag, setPriceDrag] = useState<PriceDrag | null>(null);
+  const priceDragRef = useRef<PriceDrag | null>(null);
   const [overlayVersion, setOverlayVersion] = useState(0);
 
   toolRef.current = p.tool;
@@ -66,33 +83,21 @@ export default function TradingChart(p: Props) {
   onCreateLevelRef.current = p.onCreateLevel;
   onCreateAlertRef.current = p.onCreateAlert;
   onCreateRiskRewardRef.current = p.onCreateRiskReward;
+  rrDraftRef.current = rrDraft;
+  priceDragRef.current = priceDrag;
 
   useEffect(() => {
     if (!hostRef.current) return;
 
     const c = createChart(hostRef.current, {
       autoSize: true,
-      layout: {
-        background: { type: ColorType.Solid, color: '#0a0f16' },
-        textColor: '#6f7f94',
-      },
-      grid: {
-        vertLines: { color: '#111a25' },
-        horzLines: { color: '#111a25' },
-      },
+      layout: { background: { type: ColorType.Solid, color: '#0a0f16' }, textColor: '#6f7f94' },
+      grid: { vertLines: { color: '#111a25' }, horzLines: { color: '#111a25' } },
       rightPriceScale: { borderColor: '#202b3a' },
-      timeScale: {
-        borderColor: '#202b3a',
-        timeVisible: true,
-        secondsVisible: false,
-      },
-      crosshair: {
-        vertLine: { color: '#60708755' },
-        horzLine: { color: '#60708755' },
-      },
+      timeScale: { borderColor: '#202b3a', timeVisible: true, secondsVisible: false },
+      crosshair: { vertLine: { color: '#60708755' }, horzLine: { color: '#60708755' } },
     });
 
-    // Bars are the default chart style in v2. They show OHLC without candle bodies.
     const s = c.addSeries(BarSeries, {
       upColor: '#31c48d',
       downColor: '#ef6675',
@@ -103,147 +108,144 @@ export default function TradingChart(p: Props) {
     setChart(c);
     setSeries(s);
 
-    const click = (param: any) => {
-      if (!param?.point || !param?.time) return;
-
+    const pointData = (param: any) => {
+      if (!param?.point || !param?.time) return null;
       const price = s.coordinateToPrice(param.point.y);
-      if (!price || price <= 0) return;
+      if (!price || price <= 0) return null;
+      const time = typeof param.time === 'number' ? param.time : Math.floor(Date.now() / 1000);
+      return { price, time };
+    };
 
-      const time =
-        typeof param.time === 'number'
-          ? param.time
-          : Math.floor(Date.now() / 1000);
+    const click = (param: any) => {
+      const point = pointData(param);
+      if (!point) return;
+      const { price, time } = point;
 
+      // Level and Alert are deliberately one-shot tools: one chart click creates
+      // the object; ChartPage switches the toolbar back to Select after success.
       if (toolRef.current === 'level') {
         onCreateLevelRef.current(price);
         return;
       }
-
       if (toolRef.current === 'alert') {
         onCreateAlertRef.current(price);
         return;
       }
 
       if (toolRef.current === 'risk-reward') {
-        setRrDraft((draft) => {
-          if (draft.entry === undefined) {
-            return { entry: price, startTime: time };
-          }
+        const draft = rrDraftRef.current;
+        if (draft.entry === undefined) {
+          const next = { entry: price, startTime: time };
+          rrDraftRef.current = next;
+          setRrDraft(next);
+          return;
+        }
+        if (draft.stop === undefined) {
+          const next = { ...draft, stop: price };
+          rrDraftRef.current = next;
+          setRrDraft(next);
+          return;
+        }
 
-          if (draft.stop === undefined) {
-            return { ...draft, stop: price };
-          }
-
-          const entry = Number(draft.entry);
-          const stop = Number(draft.stop);
-          const startTime = Number(draft.startTime);
-
-          // Keep endTime on an existing bar. The old implementation projected
-          // into future timestamps, and Lightweight Charts can return null for
-          // timeToCoordinate() when that timestamp is not present in the series.
-          // A same-bar R/R is still visible because the overlay enforces a
-          // minimum pixel width and can later be stretched with the time handle.
-          const endTime = time;
-
-          onCreateRiskRewardRef.current({
-            symbol: '',
-            timeframe: timeframeRef.current,
-            direction: price >= entry ? 'long' : 'short',
-            entry,
-            stop,
-            target: price,
-            startTime,
-            endTime,
-          });
-
-          return {};
+        const entry = Number(draft.entry);
+        const stop = Number(draft.stop);
+        const startTime = Number(draft.startTime);
+        const minEnd = startTime + timeframeSeconds(timeframeRef.current);
+        const endTime = Math.max(time, minEnd);
+        onCreateRiskRewardRef.current({
+          symbol: '',
+          timeframe: timeframeRef.current,
+          direction: price >= entry ? 'long' : 'short',
+          entry,
+          stop,
+          target: price,
+          startTime,
+          endTime,
         });
+        rrDraftRef.current = {};
+        setRrDraft({});
+        setRrHover(null);
       }
     };
 
-    c.subscribeClick(click);
+    const crosshair = (param: any) => {
+      if (toolRef.current !== 'risk-reward' || rrDraftRef.current.entry === undefined) {
+        setRrHover(null);
+        return;
+      }
+      const point = pointData(param);
+      if (point) setRrHover(point);
+    };
 
+    c.subscribeClick(click);
+    c.subscribeCrosshairMove(crosshair);
     return () => {
       c.unsubscribeClick(click);
+      c.unsubscribeCrosshairMove(crosshair);
       c.remove();
     };
   }, []);
 
   useEffect(() => {
     if (!chart || !hostRef.current) return;
-
     const refresh = () => setOverlayVersion((value) => value + 1);
     chart.timeScale().subscribeVisibleTimeRangeChange(refresh);
     chart.timeScale().subscribeVisibleLogicalRangeChange(refresh);
-    chart.subscribeCrosshairMove(refresh);
     const observer = new ResizeObserver(refresh);
     observer.observe(hostRef.current);
-
     return () => {
       chart.timeScale().unsubscribeVisibleTimeRangeChange(refresh);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(refresh);
-      chart.unsubscribeCrosshairMove(refresh);
       observer.disconnect();
     };
   }, [chart]);
 
   useEffect(() => {
-    series?.setData(
-      p.candles.map((c) => ({
-        ...c,
-        time: c.time as UTCTimestamp,
-      })),
-    );
+    series?.setData(p.candles.map((c) => ({ ...c, time: c.time as UTCTimestamp })));
   }, [series, p.candles]);
 
   useEffect(() => {
     if (!series) return;
-
     for (const line of lines.current) series.removePriceLine(line);
     lines.current = [];
+    manualLineMap.current.clear();
+    alertLineMap.current.clear();
 
     for (const level of p.autoLevels) {
-      lines.current.push(
-        series.createPriceLine({
-          price: level.price,
-          color:
-            level.type === 'mirror'
-              ? '#7387ff'
-              : level.type === 'support'
-                ? '#3a9b79'
-                : '#b85b6c',
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: `${level.type} · ${level.touches}`,
-        }),
-      );
+      lines.current.push(series.createPriceLine({
+        price: level.price,
+        color: level.type === 'mirror' ? '#7387ff' : level.type === 'support' ? '#3a9b79' : '#b85b6c',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: `${level.type} · ${level.touches}`,
+      }));
     }
 
     for (const level of p.manualLevels) {
-      lines.current.push(
-        series.createPriceLine({
-          price: level.price,
-          color: '#d6dbe4',
-          lineWidth: 1,
-          lineStyle: LineStyle.Solid,
-          axisLabelVisible: true,
-          title: level.label || 'Manual',
-        }),
-      );
+      const line = series.createPriceLine({
+        price: level.price,
+        color: '#d6dbe4',
+        lineWidth: 1,
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: level.label || 'Manual',
+      });
+      lines.current.push(line);
+      manualLineMap.current.set(level.id, line);
     }
 
     for (const alert of p.alerts.filter((a) => a.active)) {
-      lines.current.push(
-        series.createPriceLine({
-          price: alert.price,
-          color: '#e1b84e',
-          lineWidth: 1,
-          lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: '🔔',
-        }),
-      );
+      const line = series.createPriceLine({
+        price: alert.price,
+        color: '#e1b84e',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: '🔔',
+      });
+      lines.current.push(line);
+      alertLineMap.current.set(alert.id, line);
     }
   }, [series, p.autoLevels, p.manualLevels, p.alerts]);
 
@@ -252,38 +254,107 @@ export default function TradingChart(p: Props) {
   }, [chart, p.symbol, p.timeframe, p.candles.length]);
 
   useEffect(() => {
-    if (p.tool !== 'risk-reward') setRrDraft({});
+    if (p.tool !== 'risk-reward') {
+      rrDraftRef.current = {};
+      setRrDraft({});
+      setRrHover(null);
+    }
   }, [p.tool]);
 
   useEffect(() => {
+    rrDraftRef.current = {};
     setRrDraft({});
-  }, [p.timeframe]);
+    setRrHover(null);
+  }, [p.timeframe, p.symbol]);
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setRrDraft({});
+      if (event.key === 'Escape') {
+        rrDraftRef.current = {};
+        setRrDraft({});
+        setRrHover(null);
+      }
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   }, []);
 
-  const entryY =
-    series && rrDraft.entry !== undefined
-      ? series.priceToCoordinate(rrDraft.entry)
-      : null;
-  const stopY =
-    series && rrDraft.stop !== undefined
-      ? series.priceToCoordinate(rrDraft.stop)
-      : null;
+  useEffect(() => {
+    if (!priceDrag || !series || !hostRef.current) return;
+    const host = hostRef.current;
+
+    const move = (event: PointerEvent) => {
+      const current = priceDragRef.current;
+      if (!current) return;
+      const rect = host.getBoundingClientRect();
+      const y = event.clientY - rect.top;
+      const price = series.coordinateToPrice(y);
+      if (!price || price <= 0) return;
+      const next = { ...current, price, moved: current.moved || Math.abs(y - current.startY) > 2 };
+      priceDragRef.current = next;
+      setPriceDrag(next);
+      const line = next.kind === 'level' ? manualLineMap.current.get(next.id) : alertLineMap.current.get(next.id);
+      line?.applyOptions({ price });
+    };
+
+    const up = () => {
+      const current = priceDragRef.current;
+      if (current) {
+        if (current.moved) {
+          if (current.kind === 'level') p.onUpdateLevel(current.id, current.price);
+          else p.onUpdateAlert(current.id, current.price);
+        } else {
+          p.onUsePriceLevel(current.originalPrice);
+        }
+      }
+      priceDragRef.current = null;
+      setPriceDrag(null);
+    };
+
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up, { once: true });
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+  }, [priceDrag, series, p.onUpdateLevel, p.onUpdateAlert, p.onUsePriceLevel]);
+
+  const startPriceDrag = (kind: 'level' | 'alert', id: number, price: number, event: any) => {
+    if (p.tool !== 'select' || !hostRef.current) return;
+    event.stopPropagation();
+    event.preventDefault();
+    const rect = hostRef.current.getBoundingClientRect();
+    const next: PriceDrag = {
+      kind,
+      id,
+      originalPrice: price,
+      price,
+      startY: event.clientY - rect.top,
+      moved: false,
+    };
+    priceDragRef.current = next;
+    setPriceDrag(next);
+  };
+
+  const entryY = series && rrDraft.entry !== undefined ? series.priceToCoordinate(rrDraft.entry) : null;
+  const stopY = series && rrDraft.stop !== undefined ? series.priceToCoordinate(rrDraft.stop) : null;
+  const hoverY = series && rrHover ? series.priceToCoordinate(rrHover.price) : null;
+  const draftX1 = chart && rrDraft.startTime !== undefined
+    ? chart.timeScale().timeToCoordinate(rrDraft.startTime as UTCTimestamp)
+    : null;
+  const draftX2 = chart && rrHover
+    ? chart.timeScale().timeToCoordinate(rrHover.time as UTCTimestamp)
+    : null;
 
   return (
-    <div className="chart-card">
+    <div className={priceDrag ? 'chart-card drawing-dragging' : 'chart-card'}>
       <div ref={hostRef} className="chart-host" />
 
       <RiskRewardOverlay
         chart={chart}
         series={series}
         host={hostRef.current}
+        candles={p.candles}
         items={p.riskRewards}
         selectedId={p.selectedRiskReward?.id ?? null}
         onSelect={p.onSelectRiskReward}
@@ -292,60 +363,45 @@ export default function TradingChart(p: Props) {
       />
 
       {series && hostRef.current && (
-        <svg
-          className="chart-overlay level-actions-overlay"
-          width={hostRef.current.clientWidth}
-          height={hostRef.current.clientHeight}
-          data-version={overlayVersion}
-        >
+        <svg className="chart-overlay level-actions-overlay" width={hostRef.current.clientWidth} height={hostRef.current.clientHeight} data-version={overlayVersion}>
           {p.autoLevels.map((level, index) => {
             const y = series.priceToCoordinate(level.price);
             if (y === null) return null;
             return (
-              <g key={`auto-hit-${index}`} className="price-line-hit">
-                <rect
-                  x="0"
-                  y={y - 5}
-                  width={hostRef.current!.clientWidth}
-                  height="10"
-                  fill="transparent"
-                  className={p.tool === 'select' ? 'price-line-click-target active' : 'price-line-click-target'}
-                  onPointerDown={(event) => {
-                    if (p.tool !== 'select') return;
-                    event.stopPropagation();
-                    p.onUsePriceLevel(level.price);
-                  }}
-                />
-              </g>
+              <rect
+                key={`auto-hit-${index}`}
+                x="0"
+                y={y - 5}
+                width={hostRef.current!.clientWidth}
+                height="10"
+                fill="transparent"
+                className={p.tool === 'select' ? 'price-line-click-target active' : 'price-line-click-target'}
+                onPointerDown={(event) => {
+                  if (p.tool !== 'select') return;
+                  event.stopPropagation();
+                  p.onUsePriceLevel(level.price);
+                }}
+              />
             );
           })}
 
           {p.manualLevels.map((level) => {
-            const y = series.priceToCoordinate(level.price);
+            const shownPrice = priceDrag?.kind === 'level' && priceDrag.id === level.id ? priceDrag.price : level.price;
+            const y = series.priceToCoordinate(shownPrice);
             if (y === null) return null;
             const x = Math.max(20, hostRef.current!.clientWidth - 82);
             return (
-              <g key={`manual-hit-${level.id}`} className="price-line-hit">
+              <g key={`manual-hit-${level.id}`}>
                 <rect
                   x="0"
-                  y={y - 6}
+                  y={y - 7}
                   width={hostRef.current!.clientWidth}
-                  height="12"
+                  height="14"
                   fill="transparent"
-                  className={p.tool === 'select' ? 'price-line-click-target active' : 'price-line-click-target'}
-                  onPointerDown={(event) => {
-                    if (p.tool !== 'select') return;
-                    event.stopPropagation();
-                    p.onUsePriceLevel(level.price);
-                  }}
+                  className={p.tool === 'select' ? 'price-line-click-target active draggable' : 'price-line-click-target'}
+                  onPointerDown={(event) => startPriceDrag('level', level.id, level.price, event)}
                 />
-                <g
-                  className="drawing-delete"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    p.onDeleteLevel(level.id);
-                  }}
-                >
+                <g className="drawing-delete" onPointerDown={(event) => { event.stopPropagation(); p.onDeleteLevel(level.id); }}>
                   <circle cx={x} cy={y} r="8" />
                   <text x={x} y={y + 3.5} textAnchor="middle">×</text>
                 </g>
@@ -354,18 +410,22 @@ export default function TradingChart(p: Props) {
           })}
 
           {p.alerts.filter((alert) => alert.active).map((alert) => {
-            const y = series.priceToCoordinate(alert.price);
+            const shownPrice = priceDrag?.kind === 'alert' && priceDrag.id === alert.id ? priceDrag.price : alert.price;
+            const y = series.priceToCoordinate(shownPrice);
             if (y === null) return null;
             const x = Math.max(20, hostRef.current!.clientWidth - 104);
             return (
               <g key={`alert-hit-${alert.id}`}>
-                <g
-                  className="drawing-delete alert-delete"
-                  onPointerDown={(event) => {
-                    event.stopPropagation();
-                    p.onDeleteAlert(alert.id);
-                  }}
-                >
+                <rect
+                  x="0"
+                  y={y - 7}
+                  width={hostRef.current!.clientWidth}
+                  height="14"
+                  fill="transparent"
+                  className={p.tool === 'select' ? 'price-line-click-target active draggable alert-hit' : 'price-line-click-target'}
+                  onPointerDown={(event) => startPriceDrag('alert', alert.id, alert.price, event)}
+                />
+                <g className="drawing-delete alert-delete" onPointerDown={(event) => { event.stopPropagation(); p.onDeleteAlert(alert.id); }}>
                   <circle cx={x} cy={y} r="8" />
                   <text x={x} y={y + 3.5} textAnchor="middle">×</text>
                 </g>
@@ -377,56 +437,33 @@ export default function TradingChart(p: Props) {
 
       {p.tool === 'risk-reward' && (
         <>
-          <div
-            style={{
-              position: 'absolute',
-              left: 12,
-              top: 12,
-              zIndex: 8,
-              padding: '7px 9px',
-              background: '#111a26ee',
-              border: '1px solid #293548',
-              borderRadius: 8,
-              fontSize: 11,
-              color: '#c2ccda',
-              pointerEvents: 'none',
-            }}
-          >
+          <div className="rr-draft-help">
             Risk/Reward:{' '}
             {rrDraft.entry === undefined
               ? '1/3 — click Entry'
               : rrDraft.stop === undefined
                 ? `2/3 — click Stop · Entry ${rrDraft.entry.toFixed(4)}`
-                : `3/3 — click Target · Entry ${rrDraft.entry.toFixed(4)} · Stop ${rrDraft.stop.toFixed(4)}`}
-            <span style={{ color: '#718096', marginLeft: 8 }}>Esc = cancel</span>
+                : `3/3 — click Target / width · Entry ${rrDraft.entry.toFixed(4)} · Stop ${rrDraft.stop.toFixed(4)}`}
+            <span>Esc = cancel</span>
           </div>
 
-          {entryY !== null && (
-            <div
-              style={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                top: entryY,
-                borderTop: '1px dashed #d9e0ea',
-                zIndex: 7,
-                pointerEvents: 'none',
-              }}
-            />
-          )}
+          {entryY !== null && <div className="rr-draft-line entry" style={{ top: entryY }} />}
+          {stopY !== null && <div className="rr-draft-line stop" style={{ top: stopY }} />}
 
-          {stopY !== null && (
-            <div
-              style={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                top: stopY,
-                borderTop: '1px dashed #ef6675',
-                zIndex: 7,
-                pointerEvents: 'none',
-              }}
-            />
+          {rrDraft.stop !== undefined && rrHover && entryY !== null && stopY !== null && hoverY !== null && draftX1 !== null && draftX2 !== null && (
+            <svg className="chart-overlay rr-draft-overlay" width={hostRef.current?.clientWidth || 0} height={hostRef.current?.clientHeight || 0}>
+              {(() => {
+                const left = Math.min(draftX1, draftX2);
+                const right = Math.max(draftX1, draftX2);
+                const width = Math.max(24, right - left);
+                return (
+                  <>
+                    <rect className="rr-reward rr-draft-box" x={left} y={Math.min(entryY, hoverY)} width={width} height={Math.max(1, Math.abs(hoverY - entryY))} />
+                    <rect className="rr-risk rr-draft-box" x={left} y={Math.min(entryY, stopY)} width={width} height={Math.max(1, Math.abs(stopY - entryY))} />
+                  </>
+                );
+              })()}
+            </svg>
           )}
         </>
       )}

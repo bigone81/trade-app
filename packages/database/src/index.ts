@@ -134,8 +134,11 @@ export function deleteManualLevel(db: SqliteDb, id:number) {
   return db.prepare('DELETE FROM manual_levels WHERE id=?').run(id).changes > 0;
 }
 
-export function listRiskRewards(db: SqliteDb, symbol:string, timeframe:string): RiskReward[] {
-  return db.prepare('SELECT * FROM risk_rewards WHERE symbol=? AND timeframe=? ORDER BY id DESC').all(symbol.toUpperCase(), timeframe).map((r:any)=>({
+export function listRiskRewards(db: SqliteDb, symbol:string, timeframe?:string): RiskReward[] {
+  const rows = timeframe
+    ? db.prepare('SELECT * FROM risk_rewards WHERE symbol=? AND timeframe=? ORDER BY id DESC').all(symbol.toUpperCase(), timeframe)
+    : db.prepare('SELECT * FROM risk_rewards WHERE symbol=? ORDER BY id DESC').all(symbol.toUpperCase());
+  return rows.map((r:any)=>({
     id:r.id, symbol:r.symbol, timeframe:r.timeframe, direction:r.direction,
     entry:Number(r.entry), stop:Number(r.stop), target:Number(r.target), startTime:Number(r.start_time), endTime:Number(r.end_time),
     createdAt:r.created_at, updatedAt:r.updated_at,
@@ -173,6 +176,12 @@ export function createAlert(db:SqliteDb,input:{symbol:string;price:number;condit
   const result=db.prepare(`INSERT INTO alerts(symbol,price,condition,pre_alert_percent,source_type,source_id,telegram_enabled,trigger_once) VALUES(?,?,?,?,?,?,?,?)`)
     .run(input.symbol.toUpperCase(),input.price,input.condition??'touch',input.preAlertPercent??null,input.sourceType??'manual',input.sourceId??null,input.telegramEnabled===false?0:1,input.triggerOnce===false?0:1);
   return listAlerts(db).find(x=>x.id===Number(result.lastInsertRowid))!;
+}
+export function updateAlertPrice(db:SqliteDb,id:number,price:number):AlertRecord|null{
+  const current:any=db.prepare('SELECT * FROM alerts WHERE id=?').get(id);
+  if(!current)return null;
+  db.prepare(`UPDATE alerts SET price=?, last_price=NULL, pre_alerted_at=NULL, triggered_at=NULL WHERE id=?`).run(price,id);
+  return listAlerts(db).find(x=>x.id===id)??null;
 }
 export function setAlertActive(db:SqliteDb,id:number,active:boolean){return db.prepare('UPDATE alerts SET active=? WHERE id=?').run(active?1:0,id).changes>0;}
 export function deleteAlert(db:SqliteDb,id:number){return db.prepare('DELETE FROM alerts WHERE id=?').run(id).changes>0;}

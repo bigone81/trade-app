@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, createAlert, createManualLevel, createRiskReward, deleteAlert, deleteManualLevel, deleteRiskReward, listAlerts, listJournal, listManualLevels, listRiskRewards, openDatabase, setAlertActive, updateManualLevel, updateRiskReward } from '@trade/database';
+import { appendSystemEvent, createAlert, createManualLevel, createRiskReward, deleteAlert, deleteManualLevel, deleteRiskReward, listAlerts, listJournal, listManualLevels, listRiskRewards, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateRiskReward } from '@trade/database';
 import { accounts, appConfig, publicAccounts } from './config.js';
 import { getAccountBalance, getCandles, getExecutions, getOrders, getPositions, getPrivateClient, getTickers, normalizePrice, normalizeQty } from './bybit.js';
 
@@ -34,13 +34,14 @@ app.post('/api/drawings/levels',async(req,reply)=>{const body=z.object({symbol:z
 app.patch('/api/drawings/levels/:id',async(req,reply)=>{const id=z.coerce.number().int().positive().parse((req.params as any).id);const body=z.object({price:z.number().positive().optional(),label:z.string().max(100).nullable().optional()}).parse(req.body);const row=updateManualLevel(db,id,body);if(!row)return reply.code(404).send({error:'Not found'});return row;});
 app.delete('/api/drawings/levels/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);return deleteManualLevel(db,id)?{ok:true}:reply.code(404).send({error:'Not found'});});
 
-app.get('/api/drawings/risk-rewards',async(req)=>{const q=z.object({symbol:z.string(),timeframe:z.string()}).parse(req.query);return listRiskRewards(db,q.symbol,q.timeframe);});
+app.get('/api/drawings/risk-rewards',async(req)=>{const q=z.object({symbol:z.string(),timeframe:z.string().optional()}).parse(req.query);return listRiskRewards(db,q.symbol,q.timeframe);});
 app.post('/api/drawings/risk-rewards',async(req,reply)=>{const b=z.object({symbol:z.string(),timeframe:z.string(),direction:z.enum(['long','short']),entry:z.number().positive(),stop:z.number().positive(),target:z.number().positive(),startTime:z.number().int().positive(),endTime:z.number().int().positive()}).parse(req.body);reply.code(201);return createRiskReward(db,b);});
 app.patch('/api/drawings/risk-rewards/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);const b=z.object({direction:z.enum(['long','short']).optional(),entry:z.number().positive().optional(),stop:z.number().positive().optional(),target:z.number().positive().optional(),startTime:z.number().int().positive().optional(),endTime:z.number().int().positive().optional()}).parse(req.body);const row=updateRiskReward(db,id,b);if(!row)return reply.code(404).send({error:'Not found'});return row;});
 app.delete('/api/drawings/risk-rewards/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);return deleteRiskReward(db,id)?{ok:true}:reply.code(404).send({error:'Not found'});});
 
 app.get('/api/alerts',async(req)=>{const q=z.object({symbol:z.string().optional(),active:z.coerce.boolean().optional()}).parse(req.query);return listAlerts(db,q.symbol,q.active??false);});
 app.post('/api/alerts',async(req,reply)=>{const b=z.object({symbol:z.string(),price:z.number().positive(),condition:z.enum(['cross_up','cross_down','touch']).optional(),preAlertPercent:z.number().min(0).max(20).nullable().optional(),sourceType:z.enum(['manual','manual_level','risk_reward','automatic_level']).optional(),sourceId:z.number().int().nullable().optional(),telegramEnabled:z.boolean().optional(),triggerOnce:z.boolean().optional()}).parse(req.body);reply.code(201);return createAlert(db,b);});
+app.patch('/api/alerts/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);const b=z.object({price:z.number().positive()}).parse(req.body);const row=updateAlertPrice(db,id,b.price);if(!row)return reply.code(404).send({error:'Not found'});return row;});
 app.patch('/api/alerts/:id/active',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);const b=z.object({active:z.boolean()}).parse(req.body);return setAlertActive(db,id,b.active)?{ok:true}:reply.code(404).send({error:'Not found'});});
 app.delete('/api/alerts/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);return deleteAlert(db,id)?{ok:true}:reply.code(404).send({error:'Not found'});});
 
