@@ -323,9 +323,11 @@ export default function TradingChart(p: Props) {
 
     const reportLivePrice = (price: number, force = false) => {
       const now = Date.now();
-      if (force || now - lastPriceReportAtRef.current >= 150) {
+      // Keep the visible price feeling real-time without forcing React to render
+      // on every websocket packet. Bybit ticker updates can arrive around 10x/sec.
+      if (force || now - lastPriceReportAtRef.current >= 80) {
         lastPriceReportAtRef.current = now;
-        reportLivePrice(price);
+        onLivePriceRef.current?.(price);
       }
     };
 
@@ -343,7 +345,7 @@ export default function TradingChart(p: Props) {
     const applyBar = (bar: Candle, newBar = false) => {
       lastLiveCandleRef.current = bar;
       series.update({ ...bar, time: bar.time as UTCTimestamp });
-      reportLivePrice(bar.close);
+      reportLivePrice(bar.close, lastPriceReportAtRef.current === 0);
       if (newBar) updateTimelineForNewBar(bar);
       if (newBar && followLiveRef.current) {
         chart.timeScale().applyOptions({ rightOffset: FUTURE_BARS });
@@ -353,7 +355,7 @@ export default function TradingChart(p: Props) {
 
     const applyTicker = (price: number, timestampMs?: number) => {
       if (!Number.isFinite(price) || price <= 0) return;
-      reportLivePrice(price);
+      reportLivePrice(price, lastPriceReportAtRef.current === 0);
       const nowSeconds = Math.floor((timestampMs || Date.now()) / 1000);
       const bucket = intervalBucket(nowSeconds, p.timeframe);
       const previous = lastLiveCandleRef.current;
