@@ -1,5 +1,9 @@
 export async function api<T>(path:string, init?:RequestInit):Promise<T>{
-  const response=await fetch(path,{...init,headers:{'content-type':'application/json',...(init?.headers||{})}});
+  const headers = new Headers(init?.headers || {});
+  if (init?.body != null && !headers.has('content-type')) {
+    headers.set('content-type', 'application/json');
+  }
+  const response=await fetch(path,{...init,headers});
   const text=await response.text(); let body:any=null; try{body=text?JSON.parse(text):null}catch{body=text}
   if(!response.ok) throw new Error(body?.error || body?.message || `HTTP ${response.status}`);
   return body as T;

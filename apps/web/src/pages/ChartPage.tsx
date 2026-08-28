@@ -419,6 +419,8 @@ export default function ChartPage() {
         currentPrice={currentPrice}
         preferredPriceLevel={ui.calculatorPriceLevel}
         preferredPriceLevelSeq={ui.calculatorPriceLevelSeq}
+        autoLevels={visibleAuto}
+        manualLevels={manual.data || []}
         symbol={ui.symbol}
         liveEnabled={config.data?.liveTradingEnabled ?? false}
         onUpdateRiskReward={(id, patch) => updateRR.mutate({ id, patch })}

@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ChevronRight, X } from 'lucide-react';
 import { calculateRiskReward, calculateTrade } from '@trade/domain';
-import type { AccountPublic, RiskReward } from '@trade/shared';
+import type { AccountPublic, AutoLevel, ManualLevel, RiskReward } from '@trade/shared';
 import { api, json, money, num } from '../api';
 import ConfirmDialog from './ConfirmDialog';
 
@@ -14,13 +14,26 @@ interface Props {
   currentPrice: number;
   preferredPriceLevel: number | null;
   preferredPriceLevelSeq: number;
+  autoLevels: AutoLevel[];
+  manualLevels: ManualLevel[];
   symbol: string;
   liveEnabled: boolean;
   onUpdateRiskReward: (id: number, patch: Partial<RiskReward>) => void;
 }
 
 export default function CalculatorDrawer({
-  open, onClose, accounts, selected, currentPrice, preferredPriceLevel, preferredPriceLevelSeq, symbol, liveEnabled, onUpdateRiskReward,
+  open,
+  onClose,
+  accounts,
+  selected,
+  currentPrice,
+  preferredPriceLevel,
+  preferredPriceLevelSeq,
+  autoLevels,
+  manualLevels,
+  symbol,
+  liveEnabled,
+  onUpdateRiskReward,
 }: Props) {
   const [accountId, setAccountId] = useState(2);
   const [risk, setRisk] = useState(0.1);
@@ -39,9 +52,18 @@ export default function CalculatorDrawer({
   const [legacyRr, setLegacyRr] = useState(3);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState('');
+  const initializedSymbolRef = useRef('');
+
+  const applyPriceLevel = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0) return;
+    setPriceLevel(value);
+    setEntry(value);
+    setTrigger(value);
+  };
 
   useEffect(() => {
     if (selected) {
+      initializedSymbolRef.current = symbol;
       setEntry(selected.entry);
       setStop(selected.stop);
       setTarget(selected.target);
@@ -50,17 +72,22 @@ export default function CalculatorDrawer({
       return;
     }
 
-    if (preferredPriceLevel && preferredPriceLevel > 0) {
-      setPriceLevel(preferredPriceLevel);
-      setEntry(preferredPriceLevel);
-      setTrigger(preferredPriceLevel);
+    if (
+      preferredPriceLevel !== null &&
+      Number.isFinite(preferredPriceLevel) &&
+      preferredPriceLevel > 0
+    ) {
+      initializedSymbolRef.current = symbol;
+      applyPriceLevel(preferredPriceLevel);
       return;
     }
 
-    if (currentPrice) {
+    if (currentPrice && initializedSymbolRef.current !== symbol) {
+      initializedSymbolRef.current = symbol;
       setEntry(currentPrice);
-      setPriceLevel((v) => v || currentPrice);
-      setTechnicalStop((v) => v || currentPrice * 0.99);
+      setPriceLevel(currentPrice);
+      setTrigger(currentPrice);
+      setTechnicalStop(currentPrice * 0.99);
     }
   }, [selected?.id, preferredPriceLevel, preferredPriceLevelSeq, currentPrice, symbol]);
 
@@ -77,6 +104,33 @@ export default function CalculatorDrawer({
     enabled: Boolean(symbol),
   });
   const atr = atrQuery.data?.atr || 0;
+
+  const calculatorLevels = useMemo(() => {
+    const rows = [
+      ...manualLevels.map((level) => ({
+        key: `manual-${level.id}`,
+        price: level.price,
+        label: level.label || 'Manual',
+        kind: 'manual' as const,
+        touches: 0,
+      })),
+      ...autoLevels.map((level, index) => ({
+        key: `auto-${level.type}-${level.price}-${index}`,
+        price: level.price,
+        label: level.type === 'mirror' ? 'Mirror' : level.type === 'support' ? 'Support' : 'Resistance',
+        kind: 'auto' as const,
+        touches: level.touches,
+      })),
+    ];
+
+    const anchor = currentPrice || priceLevel || 0;
+    return rows
+      .sort((a, b) => {
+        if (!anchor) return a.price - b.price;
+        return Math.abs(a.price - anchor) - Math.abs(b.price - anchor);
+      })
+      .slice(0, 24);
+  }, [manualLevels, autoLevels, currentPrice, priceLevel]);
 
   const legacy = useMemo(() => calculateTrade({
     mode,
@@ -189,7 +243,35 @@ export default function CalculatorDrawer({
       ) : (
         <div className="drawer-section">
           <div className="field"><label>Stop model</label><select className="select" value={stopMode} onChange={(e) => setStopMode(e.target.value as any)}><option value="atr">ATR calculated</option><option value="technical">Technical stop</option></select></div>
-          <div className="field"><label>Price level</label><input className="input" type="number" step="any" value={priceLevel || ''} onChange={(e) => setPriceLevel(Number(e.target.value))} />{mode === 'market' && <small className="muted">Market calculations use the current market price; the selected level is kept here for reference.</small>}</div>
+          <div className="field">
+            <label>Price level</label>
+            <input className="input" type="number" step="any" value={priceLevel || ''} onChange={(e) => applyPriceLevel(Number(e.target.value))} />
+            {mode === 'market' && <small className="muted">Market calculations use the current market price; the selected level is kept here for reference.</small>}
+          </div>
+
+          <div className="calculator-levels">
+            <div className="calculator-levels-head">
+              <span>Levels</span>
+              <small>{calculatorLevels.length}</small>
+            </div>
+            <div className="calculator-level-list">
+              {calculatorLevels.map((level) => (
+                <button
+                  type="button"
+                  key={level.key}
+                  className={Math.abs(level.price - priceLevel) < 1e-9 ? 'calculator-level active' : 'calculator-level'}
+                  onClick={() => applyPriceLevel(level.price)}
+                >
+                  <span className="calculator-level-label">
+                    {level.label}{level.kind === 'auto' && level.touches ? ` · ${level.touches}` : ''}
+                  </span>
+                  <strong>{num(level.price, 8)}</strong>
+                </button>
+              ))}
+              {!calculatorLevels.length && <div className="calculator-level-empty">No visible levels</div>}
+            </div>
+          </div>
+
           {mode === 'stop' && <div className="field-grid"><div className="field"><label>Trigger % ATR</label><input className="input" type="number" step="0.1" value={triggerAtr} onChange={(e) => setTriggerAtr(Number(e.target.value))} /></div><div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div></div>}
           {mode === 'limit' && <div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div>}
           {stopMode === 'atr' ? <div className="field"><label>SL % ATR</label><input className="input" type="number" step="0.5" value={stopAtr} onChange={(e) => setStopAtr(Number(e.target.value))} /></div> : <div className="field"><label>Technical SL</label><input className="input" type="number" step="any" value={technicalStop || ''} onChange={(e) => setTechnicalStop(Number(e.target.value))} /></div>}
