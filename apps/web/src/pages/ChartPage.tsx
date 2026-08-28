@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
@@ -6,7 +6,6 @@ import {
   MousePointer2,
   Plus,
   Ratio,
-  Trash2,
 } from 'lucide-react';
 import type {
   AccountPublic,
@@ -21,9 +20,24 @@ import { useUi } from '../store';
 import TradingChart from '../components/TradingChart';
 import CalculatorDrawer from '../components/CalculatorDrawer';
 
+interface MarketTicker {
+  symbol: string;
+  lastPrice: number;
+  price24hPcnt: number;
+  turnover24h: number;
+}
+
+const formatTurnover = (value: number) => {
+  if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(0)}M`;
+  if (value >= 1_000) return `$${(value / 1_000).toFixed(0)}K`;
+  return `$${num(value, 0)}`;
+};
+
 export default function ChartPage() {
   const qc = useQueryClient();
   const ui = useUi();
+  const [tickerSearch, setTickerSearch] = useState('');
 
   const config = useQuery<{
     accounts: AccountPublic[];
@@ -33,19 +47,20 @@ export default function ChartPage() {
     queryFn: () => api('/api/config'),
   });
 
-  const tickers = useQuery<any[]>({
+  const tickers = useQuery<MarketTicker[]>({
     queryKey: ['tickers'],
     queryFn: () => api('/api/market/tickers'),
-    staleTime: 60000,
+    staleTime: 20_000,
+    refetchInterval: 30_000,
   });
 
   const candles = useQuery<Candle[]>({
     queryKey: ['candles', ui.symbol, ui.timeframe],
     queryFn: () =>
       api(
-        `/api/market/candles?symbol=${ui.symbol}&interval=${ui.timeframe}&limit=300`,
+        `/api/market/candles?symbol=${ui.symbol}&interval=${ui.timeframe}&limit=1000`,
       ),
-    refetchInterval: 15000,
+    refetchInterval: 30_000,
   });
 
   const levels = useQuery<{
@@ -83,10 +98,14 @@ export default function ChartPage() {
 
   const addLevel = useMutation({
     mutationFn: (price: number) =>
-      api('/api/drawings/levels',
+      api(
+        '/api/drawings/levels',
         json('POST', { symbol: ui.symbol, price, label: null }),
       ),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      ui.setTool('select');
+    },
   });
 
   const delLevel = useMutation({
@@ -141,7 +160,10 @@ export default function ChartPage() {
           triggerOnce: true,
         }),
       ),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      ui.setTool('select');
+    },
   });
 
   const delAlert = useMutation({
@@ -149,12 +171,39 @@ export default function ChartPage() {
     onSuccess: invalidate,
   });
 
-  const auto = [
-    ...(levels.data?.mirrorLevels || []),
-    ...(levels.data?.limitLevels || []),
-  ];
+  const selectedTicker = useMemo(
+    () => tickers.data?.find((ticker) => ticker.symbol === ui.symbol),
+    [tickers.data, ui.symbol],
+  );
 
-  const currentPrice = candles.data?.at(-1)?.close || 0;
+  const currentPrice =
+    selectedTicker?.lastPrice || candles.data?.at(-1)?.close || 0;
+
+  const allAuto = useMemo(
+    () => [
+      ...(levels.data?.mirrorLevels || []),
+      ...(levels.data?.limitLevels || []),
+    ],
+    [levels.data],
+  );
+
+  const visibleAuto = useMemo(() => {
+    if (!currentPrice) return allAuto;
+    const tolerance = ui.levelTolerancePercent / 100;
+    return allAuto.filter(
+      (level) => Math.abs(level.price - currentPrice) / currentPrice <= tolerance,
+    );
+  }, [allAuto, currentPrice, ui.levelTolerancePercent]);
+
+  const filteredTickers = useMemo(() => {
+    const query = tickerSearch.trim().toUpperCase();
+    const minTurnover = ui.minTurnoverMillions * 1_000_000;
+    return [...(tickers.data || [])]
+      .filter((ticker) => ticker.symbol.endsWith('USDT'))
+      .filter((ticker) => ticker.turnover24h >= minTurnover)
+      .filter((ticker) => !query || ticker.symbol.includes(query))
+      .sort((a, b) => b.turnover24h - a.turnover24h);
+  }, [tickers.data, tickerSearch, ui.minTurnoverMillions]);
 
   const tool = (name: any, Icon: any, label: string) => (
     <button
@@ -176,37 +225,19 @@ export default function ChartPage() {
     delAlert.error,
   ].find(Boolean) as Error | undefined;
 
-  const objectRowStyle: CSSProperties = {
-    display: 'grid',
-    gridTemplateColumns: '110px minmax(0,1fr) auto',
-    gap: 10,
-    alignItems: 'center',
-    padding: '8px 10px',
-    borderBottom: '1px solid #18212e',
-    fontSize: 11,
-  };
+  const priceChange = (selectedTicker?.price24hPcnt || 0) * 100;
+  const mirrorCount = levels.data?.mirrorLevels.length || 0;
+  const regularCount = levels.data?.limitLevels.length || 0;
 
   return (
-    <div className="page">
+    <div className="page chart-page">
       <div className="page-head">
         <div>
           <h1>{ui.symbol}</h1>
-          <p>Bars · automatic levels · persistent drawings</p>
+          <p>Market scanner · bars · automatic levels · persistent drawings</p>
         </div>
 
         <div className="top-controls">
-          <input
-            className="input"
-            list="ticker-list"
-            value={ui.symbol}
-            onChange={(event) => ui.setSymbol(event.target.value.toUpperCase())}
-          />
-          <datalist id="ticker-list">
-            {tickers.data?.map((ticker) => (
-              <option key={ticker.symbol} value={ticker.symbol} />
-            ))}
-          </datalist>
-
           <select
             className="select"
             value={ui.timeframe}
@@ -221,7 +252,9 @@ export default function ChartPage() {
             )}
           </select>
 
-          <span className="badge">{currentPrice ? num(currentPrice, 6) : '...'}</span>
+          <span className="badge">
+            {currentPrice ? num(currentPrice, 8) : '...'}
+          </span>
 
           <button
             className="btn secondary"
@@ -239,17 +272,6 @@ export default function ChartPage() {
         {tool('risk-reward', Ratio, 'Risk/Reward')}
         {tool('alert', Bell, 'Alert')}
 
-        {ui.selectedRiskReward && (
-          <button
-            className="tool-btn"
-            onClick={() => delRR.mutate(ui.selectedRiskReward!.id)}
-            title="Delete selected Risk/Reward"
-          >
-            <Trash2 size={15} />
-            Delete selected
-          </button>
-        )}
-
         <span style={{ marginLeft: 'auto' }} className="muted">
           {ui.tool === 'level'
             ? 'Click chart to save level'
@@ -257,7 +279,7 @@ export default function ChartPage() {
               ? 'Click chart to create Telegram alert'
               : ui.tool === 'risk-reward'
                 ? 'Click Entry → Stop → Target'
-                : 'Select a drawing'}
+                : 'Click a level to send its price to Calculator'}
         </span>
       </div>
 
@@ -271,10 +293,11 @@ export default function ChartPage() {
         </div>
       )}
 
-      <div className="chart-workspace">
+      <div className="chart-scanner-layout">
         <TradingChart
+          symbol={ui.symbol}
           candles={candles.data || []}
-          autoLevels={auto}
+          autoLevels={visibleAuto}
           manualLevels={manual.data || []}
           alerts={alerts.data || []}
           riskRewards={rr.data || []}
@@ -286,131 +309,120 @@ export default function ChartPage() {
           onCreateRiskReward={(input) => addRR.mutate(input)}
           onSelectRiskReward={(item) => ui.selectRiskReward(item)}
           onUpdateRiskReward={(id, patch) => updateRR.mutate({ id, patch })}
+          onDeleteLevel={(id) => delLevel.mutate(id)}
+          onDeleteAlert={(id) => delAlert.mutate(id)}
+          onDeleteRiskReward={(id) => delRR.mutate(id)}
+          onUsePriceLevel={(price) => ui.openCalculatorAtPrice(price)}
         />
 
-        <CalculatorDrawer
-          open={ui.drawerOpen}
-          onClose={() => ui.setDrawerOpen(false)}
-          accounts={config.data?.accounts || []}
-          selected={ui.selectedRiskReward}
-          currentPrice={currentPrice}
-          symbol={ui.symbol}
-          liveEnabled={config.data?.liveTradingEnabled ?? false}
-          onUpdateRiskReward={(id, patch) => updateRR.mutate({ id, patch })}
-        />
-      </div>
-
-      <div className="card" style={{ marginTop: 10, overflow: 'hidden' }}>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '10px 12px',
-            borderBottom: '1px solid #1b2533',
-          }}
-        >
-          <strong style={{ fontSize: 12 }}>Saved objects</strong>
-          <span className="muted" style={{ fontSize: 10 }}>
-            Levels {manual.data?.length || 0} · Alerts {alerts.data?.length || 0} · R/R{' '}
-            {rr.data?.length || 0}
-          </span>
-        </div>
-
-        {!manual.data?.length && !alerts.data?.length && !rr.data?.length && (
-          <div className="empty">No saved objects for {ui.symbol}.</div>
-        )}
-
-        {(manual.data || []).map((level) => (
-          <div style={objectRowStyle} key={`level-${level.id}`}>
-            <span className="badge">Manual level</span>
-            <div>
-              <strong>{num(level.price, 8)}</strong>
-              <div className="muted">{level.label || 'Saved level'}</div>
+        <aside className="market-panel card">
+          <div className="market-selected">
+            <div className="market-selected-head">
+              <strong>{ui.symbol}</strong>
+              <span className={priceChange >= 0 ? 'positive' : 'negative'}>
+                {priceChange >= 0 ? '+' : ''}{priceChange.toFixed(2)}%
+              </span>
             </div>
-            <div className="row-actions">
-              <button
-                className="mini-btn"
-                onClick={() => addAlert.mutate(level.price)}
-              >
-                <Bell size={11} /> Alert
-              </button>
-              <button
-                className="mini-btn danger"
-                onClick={() => delLevel.mutate(level.id)}
-              >
-                <Trash2 size={11} /> Delete
-              </button>
+            <div className="market-price">{currentPrice ? num(currentPrice, 8) : '—'}</div>
+            <div className="market-meta">
+              <span>24h {formatTurnover(selectedTicker?.turnover24h || 0)}</span>
+              <span>Visible levels {visibleAuto.length}/{allAuto.length}</span>
+            </div>
+            <div className="market-meta">
+              <span>Mirror {mirrorCount}</span>
+              <span>S/R {regularCount}</span>
             </div>
           </div>
-        ))}
 
-        {(alerts.data || []).map((alert) => (
-          <div style={objectRowStyle} key={`alert-${alert.id}`}>
-            <span className={alert.active ? 'badge live' : 'badge'}>Alert</span>
-            <div>
-              <strong>🔔 {num(alert.price, 8)}</strong>
-              <div className="muted">
-                {alert.condition} · {alert.active ? 'active' : 'inactive'}
+          <div className="market-controls">
+            <div className="range-field">
+              <div className="range-head">
+                <label>Min 24h turnover</label>
+                <strong>{ui.minTurnoverMillions}M</strong>
               </div>
+              <input
+                type="range"
+                min="0"
+                max="1000"
+                step="10"
+                value={ui.minTurnoverMillions}
+                onChange={(event) =>
+                  ui.setMinTurnoverMillions(Number(event.target.value))
+                }
+              />
             </div>
-            <button
-              className="mini-btn danger"
-              onClick={() => delAlert.mutate(alert.id)}
-            >
-              <Trash2 size={11} /> Delete
-            </button>
-          </div>
-        ))}
 
-        {(rr.data || []).map((item) => (
-          <div
-            style={{
-              ...objectRowStyle,
-              background:
-                ui.selectedRiskReward?.id === item.id ? '#121b27' : undefined,
-              cursor: 'pointer',
-            }}
-            key={`rr-${item.id}`}
-            onClick={() => ui.selectRiskReward(item)}
-          >
-            <span className="badge">R/R {item.direction.toUpperCase()}</span>
-            <div>
-              <strong>
-                {num(item.entry, 8)} → {num(item.target, 8)}
-              </strong>
-              <div className="muted">Stop {num(item.stop, 8)}</div>
+            <div className="range-field">
+              <div className="range-head">
+                <label>Show auto levels</label>
+                <strong>±{ui.levelTolerancePercent}%</strong>
+              </div>
+              <input
+                type="range"
+                min="0.5"
+                max="100"
+                step="0.5"
+                value={ui.levelTolerancePercent}
+                onChange={(event) =>
+                  ui.setLevelTolerancePercent(Number(event.target.value))
+                }
+              />
             </div>
-            <button
-              className="mini-btn danger"
-              onClick={(event) => {
-                event.stopPropagation();
-                delRR.mutate(item.id);
-              }}
-            >
-              <Trash2 size={11} /> Delete
-            </button>
+
+            <input
+              className="input ticker-search"
+              value={tickerSearch}
+              onChange={(event) => setTickerSearch(event.target.value)}
+              placeholder="Search ticker…"
+            />
           </div>
-        ))}
+
+          <div className="ticker-list-head">
+            <span>Ticker</span>
+            <span>24h</span>
+            <span>Turnover</span>
+          </div>
+
+          <div className="ticker-list-modern">
+            {filteredTickers.map((ticker) => {
+              const change = ticker.price24hPcnt * 100;
+              return (
+                <button
+                  key={ticker.symbol}
+                  className={ticker.symbol === ui.symbol ? 'ticker-row active' : 'ticker-row'}
+                  onClick={() => ui.setSymbol(ticker.symbol)}
+                >
+                  <span className="ticker-symbol">
+                    <strong>{ticker.symbol.replace(/USDT$/, '')}</strong>
+                    <small>{num(ticker.lastPrice, 6)}</small>
+                  </span>
+                  <span className={change >= 0 ? 'positive' : 'negative'}>
+                    {change >= 0 ? '+' : ''}{change.toFixed(2)}%
+                  </span>
+                  <span className="ticker-volume">{formatTurnover(ticker.turnover24h)}</span>
+                </button>
+              );
+            })}
+
+            {!filteredTickers.length && (
+              <div className="empty ticker-empty">No tickers match this filter.</div>
+            )}
+          </div>
+        </aside>
       </div>
 
-      <div className="inspector">
-        {auto.slice(0, 8).map((level, index) => (
-          <div className="inspector-chip" key={`auto-${index}`}>
-            <strong>
-              {level.type} · {num(level.price, 6)}
-            </strong>
-            {level.touches} touches · strength {num(level.strength, 2)}
-            <button
-              className="mini-btn"
-              style={{ float: 'right' }}
-              onClick={() => addAlert.mutate(level.price)}
-            >
-              <Bell size={11} />
-            </button>
-          </div>
-        ))}
-      </div>
+      <CalculatorDrawer
+        open={ui.drawerOpen}
+        onClose={() => ui.setDrawerOpen(false)}
+        accounts={config.data?.accounts || []}
+        selected={ui.selectedRiskReward}
+        currentPrice={currentPrice}
+        preferredPriceLevel={ui.calculatorPriceLevel}
+        preferredPriceLevelSeq={ui.calculatorPriceLevelSeq}
+        symbol={ui.symbol}
+        liveEnabled={config.data?.liveTradingEnabled ?? false}
+        onUpdateRiskReward={(id, patch) => updateRR.mutate({ id, patch })}
+      />
     </div>
   );
 }

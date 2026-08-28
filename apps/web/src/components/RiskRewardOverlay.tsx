@@ -17,6 +17,7 @@ interface Props {
   selectedId: number | null;
   onSelect: (r: RiskReward) => void;
   onUpdate: (id: number, p: Partial<RiskReward>) => void;
+  onDelete: (id: number) => void;
 }
 
 export default function RiskRewardOverlay({
@@ -27,6 +28,7 @@ export default function RiskRewardOverlay({
   selectedId,
   onSelect,
   onUpdate,
+  onDelete,
 }: Props) {
   const [version, setVersion] = useState(0);
   const [draft, setDraft] = useState<RiskReward | null>(null);
@@ -41,12 +43,16 @@ export default function RiskRewardOverlay({
 
     const cb = () => setVersion((v) => v + 1);
     chart.timeScale().subscribeVisibleTimeRangeChange(cb);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(cb);
+    chart.subscribeCrosshairMove(cb);
 
     const ro = host ? new ResizeObserver(cb) : null;
     if (host) ro?.observe(host);
 
     return () => {
       chart.timeScale().unsubscribeVisibleTimeRangeChange(cb);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(cb);
+      chart.unsubscribeCrosshairMove(cb);
       ro?.disconnect();
     };
   }, [chart, host]);
@@ -140,6 +146,7 @@ export default function RiskRewardOverlay({
         const width = Math.max(34, right - left);
         const rewardTop = Math.min(entryY, targetY);
         const riskTop = Math.min(entryY, stopY);
+        const objectTop = Math.min(entryY, stopY, targetY);
         const rr = calculateRiskReward(r.entry, r.stop, r.target);
         const selected = selectedId === r.id;
 
@@ -175,6 +182,17 @@ export default function RiskRewardOverlay({
             <text x={left + 8} y={rewardTop + 15}>
               R:R {rr.ratio.toFixed(2)} · {r.direction.toUpperCase()}
             </text>
+
+            <g
+              className="rr-delete"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                onDelete(r.id);
+              }}
+            >
+              <circle cx={left + width - 9} cy={objectTop + 10} r="8" />
+              <text x={left + width - 9} y={objectTop + 13.5} textAnchor="middle">×</text>
+            </g>
 
             {selected && (
               <>

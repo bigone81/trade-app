@@ -12,13 +12,15 @@ interface Props {
   accounts: AccountPublic[];
   selected: RiskReward | null;
   currentPrice: number;
+  preferredPriceLevel: number | null;
+  preferredPriceLevelSeq: number;
   symbol: string;
   liveEnabled: boolean;
   onUpdateRiskReward: (id: number, patch: Partial<RiskReward>) => void;
 }
 
 export default function CalculatorDrawer({
-  open, onClose, accounts, selected, currentPrice, symbol, liveEnabled, onUpdateRiskReward,
+  open, onClose, accounts, selected, currentPrice, preferredPriceLevel, preferredPriceLevelSeq, symbol, liveEnabled, onUpdateRiskReward,
 }: Props) {
   const [accountId, setAccountId] = useState(2);
   const [risk, setRisk] = useState(0.1);
@@ -45,12 +47,22 @@ export default function CalculatorDrawer({
       setTarget(selected.target);
       setTrigger(selected.entry);
       setSide(selected.direction === 'long' ? 'Buy' : 'Sell');
-    } else if (currentPrice) {
+      return;
+    }
+
+    if (preferredPriceLevel && preferredPriceLevel > 0) {
+      setPriceLevel(preferredPriceLevel);
+      setEntry(preferredPriceLevel);
+      setTrigger(preferredPriceLevel);
+      return;
+    }
+
+    if (currentPrice) {
       setEntry(currentPrice);
       setPriceLevel((v) => v || currentPrice);
       setTechnicalStop((v) => v || currentPrice * 0.99);
     }
-  }, [selected?.id, currentPrice]);
+  }, [selected?.id, preferredPriceLevel, preferredPriceLevelSeq, currentPrice, symbol]);
 
   const summary = useQuery<any[]>({
     queryKey: ['summary', accountId],
@@ -136,7 +148,7 @@ export default function CalculatorDrawer({
   };
 
   return (
-    <aside className={open ? 'drawer' : 'drawer closed'}>
+    <aside className={open ? 'drawer calculator-drawer' : 'drawer calculator-drawer closed'}>
       <div className="drawer-head">
         <div>
           <h2>Trade calculator</h2>
@@ -177,7 +189,7 @@ export default function CalculatorDrawer({
       ) : (
         <div className="drawer-section">
           <div className="field"><label>Stop model</label><select className="select" value={stopMode} onChange={(e) => setStopMode(e.target.value as any)}><option value="atr">ATR calculated</option><option value="technical">Technical stop</option></select></div>
-          {mode !== 'market' && <div className="field"><label>Price level</label><input className="input" type="number" step="any" value={priceLevel || ''} onChange={(e) => setPriceLevel(Number(e.target.value))} /></div>}
+          <div className="field"><label>Price level</label><input className="input" type="number" step="any" value={priceLevel || ''} onChange={(e) => setPriceLevel(Number(e.target.value))} />{mode === 'market' && <small className="muted">Market calculations use the current market price; the selected level is kept here for reference.</small>}</div>
           {mode === 'stop' && <div className="field-grid"><div className="field"><label>Trigger % ATR</label><input className="input" type="number" step="0.1" value={triggerAtr} onChange={(e) => setTriggerAtr(Number(e.target.value))} /></div><div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div></div>}
           {mode === 'limit' && <div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div>}
           {stopMode === 'atr' ? <div className="field"><label>SL % ATR</label><input className="input" type="number" step="0.5" value={stopAtr} onChange={(e) => setStopAtr(Number(e.target.value))} /></div> : <div className="field"><label>Technical SL</label><input className="input" type="number" step="any" value={technicalStop || ''} onChange={(e) => setTechnicalStop(Number(e.target.value))} /></div>}

@@ -20,6 +20,7 @@ import type {
 import RiskRewardOverlay from './RiskRewardOverlay';
 
 interface Props {
+  symbol: string;
   candles: Candle[];
   autoLevels: AutoLevel[];
   manualLevels: ManualLevel[];
@@ -35,6 +36,10 @@ interface Props {
   ) => void;
   onSelectRiskReward: (r: RiskReward) => void;
   onUpdateRiskReward: (id: number, p: Partial<RiskReward>) => void;
+  onDeleteLevel: (id: number) => void;
+  onDeleteAlert: (id: number) => void;
+  onDeleteRiskReward: (id: number) => void;
+  onUsePriceLevel: (price: number) => void;
 }
 
 type RrDraft = {
@@ -54,6 +59,7 @@ export default function TradingChart(p: Props) {
   const onCreateAlertRef = useRef(p.onCreateAlert);
   const onCreateRiskRewardRef = useRef(p.onCreateRiskReward);
   const [rrDraft, setRrDraft] = useState<RrDraft>({});
+  const [overlayVersion, setOverlayVersion] = useState(0);
 
   toolRef.current = p.tool;
   timeframeRef.current = p.timeframe;
@@ -164,6 +170,24 @@ export default function TradingChart(p: Props) {
   }, []);
 
   useEffect(() => {
+    if (!chart || !hostRef.current) return;
+
+    const refresh = () => setOverlayVersion((value) => value + 1);
+    chart.timeScale().subscribeVisibleTimeRangeChange(refresh);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(refresh);
+    chart.subscribeCrosshairMove(refresh);
+    const observer = new ResizeObserver(refresh);
+    observer.observe(hostRef.current);
+
+    return () => {
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(refresh);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(refresh);
+      chart.unsubscribeCrosshairMove(refresh);
+      observer.disconnect();
+    };
+  }, [chart]);
+
+  useEffect(() => {
     series?.setData(
       p.candles.map((c) => ({
         ...c,
@@ -225,7 +249,7 @@ export default function TradingChart(p: Props) {
 
   useEffect(() => {
     if (chart && p.candles.length) chart.timeScale().fitContent();
-  }, [chart, p.candles.length]);
+  }, [chart, p.symbol, p.timeframe, p.candles.length]);
 
   useEffect(() => {
     if (p.tool !== 'risk-reward') setRrDraft({});
@@ -264,7 +288,92 @@ export default function TradingChart(p: Props) {
         selectedId={p.selectedRiskReward?.id ?? null}
         onSelect={p.onSelectRiskReward}
         onUpdate={p.onUpdateRiskReward}
+        onDelete={p.onDeleteRiskReward}
       />
+
+      {series && hostRef.current && (
+        <svg
+          className="chart-overlay level-actions-overlay"
+          width={hostRef.current.clientWidth}
+          height={hostRef.current.clientHeight}
+          data-version={overlayVersion}
+        >
+          {p.autoLevels.map((level, index) => {
+            const y = series.priceToCoordinate(level.price);
+            if (y === null) return null;
+            return (
+              <g key={`auto-hit-${index}`} className="price-line-hit">
+                <rect
+                  x="0"
+                  y={y - 5}
+                  width={hostRef.current!.clientWidth}
+                  height="10"
+                  fill="transparent"
+                  className={p.tool === 'select' ? 'price-line-click-target active' : 'price-line-click-target'}
+                  onPointerDown={(event) => {
+                    if (p.tool !== 'select') return;
+                    event.stopPropagation();
+                    p.onUsePriceLevel(level.price);
+                  }}
+                />
+              </g>
+            );
+          })}
+
+          {p.manualLevels.map((level) => {
+            const y = series.priceToCoordinate(level.price);
+            if (y === null) return null;
+            const x = Math.max(20, hostRef.current!.clientWidth - 82);
+            return (
+              <g key={`manual-hit-${level.id}`} className="price-line-hit">
+                <rect
+                  x="0"
+                  y={y - 6}
+                  width={hostRef.current!.clientWidth}
+                  height="12"
+                  fill="transparent"
+                  className={p.tool === 'select' ? 'price-line-click-target active' : 'price-line-click-target'}
+                  onPointerDown={(event) => {
+                    if (p.tool !== 'select') return;
+                    event.stopPropagation();
+                    p.onUsePriceLevel(level.price);
+                  }}
+                />
+                <g
+                  className="drawing-delete"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    p.onDeleteLevel(level.id);
+                  }}
+                >
+                  <circle cx={x} cy={y} r="8" />
+                  <text x={x} y={y + 3.5} textAnchor="middle">×</text>
+                </g>
+              </g>
+            );
+          })}
+
+          {p.alerts.filter((alert) => alert.active).map((alert) => {
+            const y = series.priceToCoordinate(alert.price);
+            if (y === null) return null;
+            const x = Math.max(20, hostRef.current!.clientWidth - 104);
+            return (
+              <g key={`alert-hit-${alert.id}`}>
+                <g
+                  className="drawing-delete alert-delete"
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                    p.onDeleteAlert(alert.id);
+                  }}
+                >
+                  <circle cx={x} cy={y} r="8" />
+                  <text x={x} y={y + 3.5} textAnchor="middle">×</text>
+                </g>
+              </g>
+            );
+          })}
+        </svg>
+      )}
 
       {p.tool === 'risk-reward' && (
         <>
