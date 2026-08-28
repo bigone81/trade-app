@@ -1,0 +1,53 @@
+[
+    {
+        "date": "2025-10-02 16:17:11",
+        "Ticker": "0GUSDT",
+        "Type": "Sell",
+        "Order": "Limit",
+        "Trigger": "1.9950",
+        "Entry": "1.9900",
+        "SL": "2.0900",
+        "TP": "1.6900",
+        "Position": "1.0",
+        "pointType": "10",
+        "priceLevel": "2.0000",
+        "status": "2",
+        "rR": 0,
+        "style": "1",
+        "account": "account4"
+    },
+    {
+        "date": "2025-10-02 16:17:21",
+        "Ticker": "0GUSDT",
+        "Type": "Sell",
+        "Order": "Limit",
+        "Trigger": "2.4950",
+        "Entry": "2.4900",
+        "SL": "2.5900",
+        "TP": "2.1900",
+        "Position": "1.0",
+        "pointType": "10",
+        "priceLevel": "2.5000",
+        "status": "2",
+        "rR": 0,
+        "style": "1",
+        "account": "account4"
+    },
+    {
+        "date": "2025-10-02 16:29:41",
+        "Ticker": "SOLUSDT",
+        "Type": "Sell",
+        "Order": "Limit",
+        "Trigger": "0.00",
+        "Entry": "250.00",
+        "SL": "252.00",
+        "TP": "244.00",
+        "Position": "0.0",
+        "pointType": "20",
+        "priceLevel": "250.00",
+        "status": "2",
+        "rR": 0,
+        "style": "1",
+        "account": "account4"
+    }
+]

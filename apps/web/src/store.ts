@@ -1,0 +1,4 @@
+import { create } from 'zustand';
+import type { DrawingTool, RiskReward } from '@trade/shared';
+interface UiState{symbol:string;timeframe:string;tool:DrawingTool;drawerOpen:boolean;selectedRiskReward:RiskReward|null;selectedAccountId:number;setSymbol:(v:string)=>void;setTimeframe:(v:string)=>void;setTool:(v:DrawingTool)=>void;selectRiskReward:(v:RiskReward|null)=>void;setDrawerOpen:(v:boolean)=>void;setAccountId:(v:number)=>void;}
+export const useUi=create<UiState>((set)=>({symbol:new URLSearchParams(location.search).get('symbol')||'BTCUSDT',timeframe:'15',tool:'select',drawerOpen:false,selectedRiskReward:null,selectedAccountId:2,setSymbol:(symbol)=>set({symbol:symbol.toUpperCase()}),setTimeframe:(timeframe)=>set({timeframe}),setTool:(tool)=>set({tool}),selectRiskReward:(selectedRiskReward)=>set({selectedRiskReward,drawerOpen:Boolean(selectedRiskReward)}),setDrawerOpen:(drawerOpen)=>set({drawerOpen}),setAccountId:(selectedAccountId)=>set({selectedAccountId})}));
