@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, createAlert, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, listAlerts, listJournal, listJournalImages, listManualLevels, listRiskRewards, openDatabase, recordJournalBybitExecution, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
+import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, recordJournalBybitExecution, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { accounts, appConfig, publicAccounts } from './config.js';
 import { getAccountBalance, getCandles, getExecutions, getOrders, getPositions, getPrivateClient, getTickers, normalizePrice, normalizeQty } from './bybit.js';
 
@@ -23,7 +23,7 @@ app.addHook('onRequest', async (req, reply) => {
 });
 
 app.get('/api/health',async()=>({status:'ok',liveTradingEnabled:appConfig.liveTradingEnabled}));
-app.get('/api/config',async()=>({accounts:publicAccounts(),liveTradingEnabled:appConfig.liveTradingEnabled,defaultSymbol:appConfig.defaultSymbol,defaultTimeframe:appConfig.defaultTimeframe}));
+app.get('/api/config',async()=>({accounts:publicAccounts(),liveTradingEnabled:appConfig.liveTradingEnabled,defaultSymbol:appConfig.defaultSymbol,defaultTimeframe:appConfig.defaultTimeframe,telegramConfigured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID)}));
 
 app.get('/api/market/tickers',async()=>getTickers());
 app.get('/api/market/candles',async(req)=>{const q=z.object({symbol:z.string().min(2).max(30),interval:z.string().default('15'),limit:z.coerce.number().int().min(30).max(1000).default(300)}).parse(req.query);return getCandles(q.symbol,q.interval,q.limit);});
@@ -97,6 +97,38 @@ app.delete('/api/journal/images/:imageId',async(req,reply)=>{
   return {ok:true};
 });
 app.get('/api/system/events',async(req)=>{const q=z.object({limit:z.coerce.number().int().min(1).max(200).default(50)}).parse(req.query);return db.prepare('SELECT * FROM system_events ORDER BY id DESC LIMIT ?').all(q.limit);});
+
+app.get('/api/notifications',async(req)=>{
+  const q=z.object({limit:z.coerce.number().int().min(1).max(200).default(40),unreadOnly:z.coerce.boolean().optional()}).parse(req.query);
+  return listNotifications(db,{limit:q.limit,unreadOnly:q.unreadOnly??false});
+});
+app.get('/api/notifications/unread-count',async()=>({count:countUnreadNotifications(db)}));
+app.post('/api/notifications/:id/read',async(req,reply)=>{
+  const id=z.coerce.number().int().positive().parse((req.params as any).id);
+  return markNotificationRead(db,id)?{ok:true}:reply.code(404).send({error:'Notification not found'});
+});
+app.post('/api/notifications/read-all',async()=>({ok:true,updated:markAllNotificationsRead(db)}));
+app.get('/api/notification-settings',async()=>getNotificationSettings(db));
+app.put('/api/notification-settings',async(req)=>{
+  const patch=z.object({
+    marketAlerts:z.boolean().optional(),marketPreAlerts:z.boolean().optional(),tradingFilled:z.boolean().optional(),tradingPartial:z.boolean().optional(),tradingCancelled:z.boolean().optional(),tradingRejected:z.boolean().optional(),
+    systemOffline:z.boolean().optional(),systemReconnect:z.boolean().optional(),telegramMarket:z.boolean().optional(),telegramTrading:z.boolean().optional(),telegramSystem:z.boolean().optional(),systemOfflineSeconds:z.number().int().min(10).max(600).optional(),
+  }).parse(req.body);
+  return updateNotificationSettings(db,patch);
+});
+
+app.post('/api/notifications/test',async(req,reply)=>{
+  const b=z.object({telegram:z.boolean().default(false)}).parse(req.body??{});
+  const row=createNotification(db,{category:'system',eventType:'notification.test',severity:'info',title:'Test notification',message:'Trade App notification center is working.',actionUrl:'/settings'});
+  if(!row)return reply.code(500).send({error:'Could not create test notification'});
+  if(b.telegram){
+    const token=process.env.TELEGRAM_BOT_TOKEN||'';const chatId=process.env.TELEGRAM_CHAT_ID||'';
+    if(!token||!chatId){markNotificationTelegram(db,row.id,'not_configured');return {...row,telegramStatus:'not_configured'};}
+    try{const r=await fetch(`https://api.telegram.org/bot${token}/sendMessage`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:chatId,text:'✅ <b>Trade App</b>\n\nТестовое уведомление работает.',parse_mode:'HTML'})});if(!r.ok)throw new Error(`Telegram HTTP ${r.status}: ${await r.text()}`);markNotificationTelegram(db,row.id,'sent');}
+    catch(e){const message=e instanceof Error?e.message:String(e);markNotificationTelegram(db,row.id,'error',message);return reply.code(502).send({error:message});}
+  }
+  return row;
+});
 
 async function accountIds(value:unknown){const q=z.coerce.number().int().min(1).max(5).optional().parse(value);return q?[q]:accounts.filter(a=>a.configured).map(a=>a.id);}
 app.get('/api/trade/summary',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return Promise.all(ids.map(async id=>{try{const [balance,positions,orders]=await Promise.all([getAccountBalance(id),getPositions(id),getOrders(id)]);return {...balance,positions:positions.length,orders:orders.length,unrealisedPnl:positions.reduce((s,p)=>s+p.unrealisedPnl,0),online:true};}catch(e){return {accountId:id,accountName:accounts.find(a=>a.id===id)?.name,online:false,error:e instanceof Error?e.message:String(e)};}}));});

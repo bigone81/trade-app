@@ -1,11 +1,14 @@
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AccountPublic } from '@trade/shared';
-import { api } from '../api';
+import { api, json } from '../api';
 import { clearChartViews, defaultPreferences, usePreferences } from '../preferences';
 import { useUi } from '../store';
 
+type NotificationSettings={marketAlerts:boolean;marketPreAlerts:boolean;tradingFilled:boolean;tradingPartial:boolean;tradingCancelled:boolean;tradingRejected:boolean;systemOffline:boolean;systemReconnect:boolean;telegramMarket:boolean;telegramTrading:boolean;telegramSystem:boolean;systemOfflineSeconds:number};
+
 export default function SettingsPage() {
+  const qc=useQueryClient();
   const { preferences, save } = usePreferences();
   const ui = useUi();
   const config = useQuery<{
@@ -13,6 +16,7 @@ export default function SettingsPage() {
     liveTradingEnabled: boolean;
     defaultSymbol: string;
     defaultTimeframe: string;
+    telegramConfigured: boolean;
   }>({ queryKey: ['config'], queryFn: () => api('/api/config') });
 
   const health = useQuery<any>({
@@ -26,6 +30,17 @@ export default function SettingsPage() {
     queryFn: () => api('/api/system/events?limit=20'),
     refetchInterval: 5_000,
   });
+
+  const notificationSettings=useQuery<NotificationSettings>({queryKey:['notification-settings'],queryFn:()=>api('/api/notification-settings')});
+  const saveNotifications=useMutation({
+    mutationFn:(patch:Partial<NotificationSettings>)=>api<NotificationSettings>('/api/notification-settings',json('PUT',patch)),
+    onSuccess:(data)=>qc.setQueryData(['notification-settings'],data),
+  });
+  const testNotification=useMutation({mutationFn:(telegram:boolean)=>api('/api/notifications/test',json('POST',{telegram})),onSuccess:()=>{void qc.invalidateQueries({queryKey:['notifications']});void qc.invalidateQueries({queryKey:['notification-count']});}});
+  const patchNotification=(patch:Partial<NotificationSettings>)=>{
+    if(!notificationSettings.data)return;
+    saveNotifications.mutate(patch);
+  };
 
   const accounts = config.data?.accounts || [];
   const configuredCount = useMemo(() => accounts.filter((a) => a.configured).length, [accounts]);
@@ -146,6 +161,34 @@ export default function SettingsPage() {
             <div className="kv" key={a.id}><span>{a.name}</span><b>{a.configured ? 'configured' : 'no keys'} · {a.demo ? 'demo' : 'prod'}</b></div>
           ))}
           <div className="exchange-placeholder">Architecture is provider-ready. Binance / OKX adapters can be added later without changing Chart, Journal or Calculator.</div>
+        </section>
+
+        <section className="card settings-card notifications-settings-card">
+          <h3>Notifications</h3>
+          <div className="kv"><span>Telegram</span><b className={config.data?.telegramConfigured?'positive':'warning-text'}>{config.data?.telegramConfigured?'connected':'not configured'}</b></div>
+          {!notificationSettings.data?<p className="muted settings-hint">Loading notification preferences…</p>:<>
+            <div className="settings-subtitle">Market</div>
+            <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.marketAlerts} onChange={(e)=>patchNotification({marketAlerts:e.target.checked})}/> Level reached</label>
+            <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.marketPreAlerts} onChange={(e)=>patchNotification({marketPreAlerts:e.target.checked})}/> Pre-alert when approaching a level</label>
+            <label className="setting-check nested"><input type="checkbox" checked={notificationSettings.data.telegramMarket} onChange={(e)=>patchNotification({telegramMarket:e.target.checked})}/> Send market notifications to Telegram</label>
+
+            <div className="settings-subtitle">Trading</div>
+            <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.tradingFilled} onChange={(e)=>patchNotification({tradingFilled:e.target.checked})}/> Filled / TP / SL / close</label>
+            <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.tradingPartial} onChange={(e)=>patchNotification({tradingPartial:e.target.checked})}/> Partial fill</label>
+            <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.tradingCancelled} onChange={(e)=>patchNotification({tradingCancelled:e.target.checked})}/> Cancelled order</label>
+            <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.tradingRejected} onChange={(e)=>patchNotification({tradingRejected:e.target.checked})}/> Rejected order</label>
+            <label className="setting-check nested"><input type="checkbox" checked={notificationSettings.data.telegramTrading} onChange={(e)=>patchNotification({telegramTrading:e.target.checked})}/> Send trading notifications to Telegram</label>
+
+            <div className="settings-subtitle">System</div>
+            <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.systemOffline} onChange={(e)=>patchNotification({systemOffline:e.target.checked})}/> Connection offline</label>
+            <div className="field"><label>Notify after · {notificationSettings.data.systemOfflineSeconds} sec</label><input className="range" type="range" min="10" max="180" step="10" value={notificationSettings.data.systemOfflineSeconds} onChange={(e)=>patchNotification({systemOfflineSeconds:Number(e.target.value)})}/></div>
+            <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.systemReconnect} onChange={(e)=>patchNotification({systemReconnect:e.target.checked})}/> Notify when connection is restored</label>
+            <label className="setting-check nested"><input type="checkbox" checked={notificationSettings.data.telegramSystem} onChange={(e)=>patchNotification({telegramSystem:e.target.checked})}/> Send system notifications to Telegram</label>
+          </>}
+          <div className="notification-test-actions"><button className="btn secondary" disabled={testNotification.isPending} onClick={()=>testNotification.mutate(false)}>Test in-app</button><button className="btn secondary" disabled={testNotification.isPending||!config.data?.telegramConfigured} onClick={()=>testNotification.mutate(true)}>Test Telegram</button></div>
+          {saveNotifications.isPending&&<p className="muted settings-hint">Saving…</p>}
+          {testNotification.isError&&<p className="inline-error">{testNotification.error instanceof Error?testNotification.error.message:'Notification test failed'}</p>}
+          <p className="muted settings-hint">The bell in the top-right keeps an in-app history. Existing chart bells continue to define which price levels are monitored.</p>
         </section>
 
         <section className="card settings-card">

@@ -127,6 +127,35 @@ CREATE TABLE IF NOT EXISTS system_events (
 );
 CREATE INDEX IF NOT EXISTS idx_system_events_created ON system_events(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category TEXT NOT NULL CHECK(category IN ('market','trading','system')),
+  event_type TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'info',
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  exchange TEXT NOT NULL DEFAULT 'bybit',
+  account_id INTEGER,
+  account_name TEXT,
+  symbol TEXT,
+  action_url TEXT,
+  payload_json TEXT,
+  dedupe_key TEXT UNIQUE,
+  telegram_status TEXT NOT NULL DEFAULT 'not_requested',
+  telegram_error TEXT,
+  telegram_sent_at TEXT,
+  read_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications(read_at, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS notification_settings (
+  id INTEGER PRIMARY KEY CHECK(id=1),
+  settings_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS worker_state (
   key TEXT PRIMARY KEY,
   value TEXT,
@@ -242,6 +271,94 @@ export function deleteAlert(db:SqliteDb,id:number){return db.prepare('DELETE FRO
 export function appendSystemEvent(db:SqliteDb,event:{severity?:string;eventType:string;accountId?:number|null;symbol?:string|null;message:string;payload?:unknown}){
   db.prepare(`INSERT INTO system_events(severity,event_type,account_id,symbol,message,payload_json) VALUES(?,?,?,?,?,?)`)
     .run(event.severity??'info',event.eventType,event.accountId??null,event.symbol??null,event.message,event.payload===undefined?null:JSON.stringify(event.payload));
+}
+
+export type NotificationSettings = {
+  marketAlerts:boolean;
+  marketPreAlerts:boolean;
+  tradingFilled:boolean;
+  tradingPartial:boolean;
+  tradingCancelled:boolean;
+  tradingRejected:boolean;
+  systemOffline:boolean;
+  systemReconnect:boolean;
+  telegramMarket:boolean;
+  telegramTrading:boolean;
+  telegramSystem:boolean;
+  systemOfflineSeconds:number;
+};
+
+export const defaultNotificationSettings:NotificationSettings={
+  marketAlerts:true,
+  marketPreAlerts:true,
+  tradingFilled:true,
+  tradingPartial:true,
+  tradingCancelled:true,
+  tradingRejected:true,
+  systemOffline:true,
+  systemReconnect:false,
+  telegramMarket:true,
+  telegramTrading:true,
+  telegramSystem:true,
+  systemOfflineSeconds:60,
+};
+
+export function getNotificationSettings(db:SqliteDb):NotificationSettings{
+  const row:any=db.prepare('SELECT settings_json FROM notification_settings WHERE id=1').get();
+  if(!row){
+    db.prepare('INSERT INTO notification_settings(id,settings_json) VALUES(1,?)').run(JSON.stringify(defaultNotificationSettings));
+    return {...defaultNotificationSettings};
+  }
+  try{return {...defaultNotificationSettings,...JSON.parse(String(row.settings_json||'{}'))};}
+  catch{return {...defaultNotificationSettings};}
+}
+
+export function updateNotificationSettings(db:SqliteDb,patch:Partial<NotificationSettings>):NotificationSettings{
+  const current=getNotificationSettings(db);
+  const next={...current,...patch};
+  next.systemOfflineSeconds=Math.max(10,Math.min(600,Math.round(Number(next.systemOfflineSeconds)||60)));
+  db.prepare(`INSERT INTO notification_settings(id,settings_json,updated_at) VALUES(1,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=CURRENT_TIMESTAMP`).run(JSON.stringify(next));
+  return next;
+}
+
+export type NotificationRecord={
+  id:number;category:'market'|'trading'|'system';eventType:string;severity:string;title:string;message:string;exchange:string;
+  accountId:number|null;accountName:string|null;symbol:string|null;actionUrl:string|null;payload:unknown;telegramStatus:string;telegramError:string|null;
+  telegramSentAt:string|null;readAt:string|null;createdAt:string;
+};
+
+const mapNotification=(r:any):NotificationRecord=>({
+  id:Number(r.id),category:r.category,eventType:r.event_type,severity:r.severity,title:r.title,message:r.message,exchange:r.exchange,
+  accountId:n(r.account_id),accountName:r.account_name,symbol:r.symbol,actionUrl:r.action_url,payload:r.payload_json?(()=>{try{return JSON.parse(r.payload_json)}catch{return r.payload_json}})():null,
+  telegramStatus:r.telegram_status,telegramError:r.telegram_error,telegramSentAt:r.telegram_sent_at,readAt:r.read_at,createdAt:r.created_at,
+});
+
+export function createNotification(db:SqliteDb,input:{
+  category:NotificationRecord['category'];eventType:string;severity?:string;title:string;message:string;exchange?:string;accountId?:number|null;accountName?:string|null;
+  symbol?:string|null;actionUrl?:string|null;payload?:unknown;dedupeKey?:string|null;
+}):NotificationRecord|null{
+  const result=db.prepare(`INSERT OR IGNORE INTO notifications(category,event_type,severity,title,message,exchange,account_id,account_name,symbol,action_url,payload_json,dedupe_key)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(input.category,input.eventType,input.severity??'info',input.title,input.message,input.exchange??'bybit',input.accountId??null,input.accountName??null,input.symbol?.toUpperCase()??null,input.actionUrl??null,input.payload===undefined?null:JSON.stringify(input.payload),input.dedupeKey??null);
+  if(result.changes)return mapNotification(db.prepare('SELECT * FROM notifications WHERE id=?').get(Number(result.lastInsertRowid)));
+  if(input.dedupeKey){const row=db.prepare('SELECT * FROM notifications WHERE dedupe_key=?').get(input.dedupeKey);return row?mapNotification(row):null;}
+  return null;
+}
+
+export function listNotifications(db:SqliteDb,input:{limit?:number;unreadOnly?:boolean}={}):NotificationRecord[]{
+  const limit=Math.max(1,Math.min(200,input.limit??40));
+  const rows=input.unreadOnly
+    ? db.prepare('SELECT * FROM notifications WHERE read_at IS NULL ORDER BY id DESC LIMIT ?').all(limit)
+    : db.prepare('SELECT * FROM notifications ORDER BY id DESC LIMIT ?').all(limit);
+  return (rows as any[]).map(mapNotification);
+}
+
+export function countUnreadNotifications(db:SqliteDb){const row:any=db.prepare('SELECT COUNT(*) count FROM notifications WHERE read_at IS NULL').get();return Number(row?.count)||0;}
+export function markNotificationRead(db:SqliteDb,id:number){return db.prepare('UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP) WHERE id=?').run(id).changes>0;}
+export function markAllNotificationsRead(db:SqliteDb){return db.prepare('UPDATE notifications SET read_at=CURRENT_TIMESTAMP WHERE read_at IS NULL').run().changes;}
+export function markNotificationTelegram(db:SqliteDb,id:number,status:'sent'|'error'|'not_configured',error?:string|null){
+  db.prepare(`UPDATE notifications SET telegram_status=?,telegram_error=?,telegram_sent_at=CASE WHEN ?='sent' THEN CURRENT_TIMESTAMP ELSE telegram_sent_at END WHERE id=?`)
+    .run(status,error??null,status,id);
 }
 
 export function listJournal(db:SqliteDb, filters:{accountId?:number;symbol?:string;limit?:number}={}){
