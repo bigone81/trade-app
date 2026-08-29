@@ -1,11 +1,12 @@
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, createAlert, createManualLevel, createRiskReward, deleteAlert, deleteManualLevel, deleteRiskReward, listAlerts, listJournal, listManualLevels, listRiskRewards, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateRiskReward, updateJournalOrder } from '@trade/database';
+import { appendSystemEvent, createAlert, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, listAlerts, listJournal, listJournalImages, listManualLevels, listRiskRewards, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateRiskReward, updateJournalOrder } from '@trade/database';
 import { accounts, appConfig, publicAccounts } from './config.js';
 import { getAccountBalance, getCandles, getExecutions, getOrders, getPositions, getPrivateClient, getTickers, normalizePrice, normalizeQty } from './bybit.js';
 
@@ -47,6 +48,34 @@ app.delete('/api/alerts/:id',async(req,reply)=>{const id=z.coerce.number().parse
 
 app.get('/api/journal',async(req)=>{const q=z.object({accountId:z.coerce.number().int().min(1).max(5).optional(),symbol:z.string().optional(),limit:z.coerce.number().int().optional()}).parse(req.query);return listJournal(db,q);});
 app.patch('/api/journal/:id',async(req,reply)=>{const id=z.coerce.number().int().positive().parse((req.params as any).id);const b=z.object({rr:z.number().min(-100).max(100).optional(),style:z.number().int().min(0).max(99).optional(),status:z.number().int().min(0).max(99).optional(),note:z.string().max(20000).nullable().optional(),setup:z.string().max(200).nullable().optional(),tags:z.array(z.string().max(80)).max(30).optional(),executionQuality:z.string().max(80).nullable().optional(),exitPrice:z.number().min(0).nullable().optional(),pnl:z.number().nullable().optional(),fees:z.number().min(0).nullable().optional()}).parse(req.body);const row=updateJournalOrder(db,id,b);if(!row)return reply.code(404).send({error:'Not found'});return row;});
+
+const journalImageKinds=['before','entry','management','exit','other'] as const;
+const journalImageExt=(buffer:Buffer,mime:string)=>{
+  if(mime==='image/png' && buffer.length>=8 && buffer.subarray(0,8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])))return 'png';
+  if(mime==='image/jpeg' && buffer.length>=3 && buffer[0]===0xff && buffer[1]===0xd8 && buffer[2]===0xff)return 'jpg';
+  if(mime==='image/webp' && buffer.length>=12 && buffer.toString('ascii',0,4)==='RIFF' && buffer.toString('ascii',8,12)==='WEBP')return 'webp';
+  return null;
+};
+app.get('/api/journal/:id/images',async(req)=>{const id=z.coerce.number().int().positive().parse((req.params as any).id);return listJournalImages(db,id);});
+app.post('/api/journal/:id/images',{bodyLimit:12*1024*1024},async(req,reply)=>{
+  const id=z.coerce.number().int().positive().parse((req.params as any).id);
+  const b=z.object({kind:z.enum(journalImageKinds).default('other'),name:z.string().max(220).nullable().optional(),mime:z.enum(['image/png','image/jpeg','image/webp']),dataBase64:z.string().min(8)}).parse(req.body);
+  let bytes:Buffer; try{bytes=Buffer.from(b.dataBase64,'base64');}catch{return reply.code(400).send({error:'Invalid image data'});}
+  if(bytes.length<16)return reply.code(400).send({error:'Image is empty or invalid'});
+  if(bytes.length>8*1024*1024)return reply.code(413).send({error:'Image is too large. Maximum size is 8 MB.'});
+  const ext=journalImageExt(bytes,b.mime);if(!ext)return reply.code(400).send({error:'Only valid PNG, JPEG and WEBP images are allowed'});
+  const rel=`journal/${id}/${randomUUID()}.${ext}`;const dir=join(appConfig.chartsDir,'journal',String(id));mkdirSync(dir,{recursive:true});
+  const full=join(appConfig.chartsDir,rel);writeFileSync(full,bytes,{flag:'wx'});
+  const row=createJournalImage(db,{journalOrderId:id,kind:b.kind,path:rel,originalName:b.name??null,mime:b.mime,sizeBytes:bytes.length});
+  if(!row){try{unlinkSync(full);}catch{}return reply.code(404).send({error:'Journal trade not found'});}
+  reply.code(201);return row;
+});
+app.delete('/api/journal/images/:imageId',async(req,reply)=>{
+  const imageId=z.coerce.number().int().positive().parse((req.params as any).imageId);const row=getJournalImage(db,imageId);if(!row)return reply.code(404).send({error:'Image not found'});
+  if(!deleteJournalImage(db,imageId))return reply.code(404).send({error:'Image not found'});
+  try{unlinkSync(join(appConfig.chartsDir,row.path));}catch(e){req.log.warn({err:e,imageId,path:row.path},'Could not remove journal image file');}
+  return {ok:true};
+});
 app.get('/api/system/events',async(req)=>{const q=z.object({limit:z.coerce.number().int().min(1).max(200).default(50)}).parse(req.query);return db.prepare('SELECT * FROM system_events ORDER BY id DESC LIMIT ?').all(q.limit);});
 
 async function accountIds(value:unknown){const q=z.coerce.number().int().min(1).max(5).optional().parse(value);return q?[q]:accounts.filter(a=>a.configured).map(a=>a.id);}

@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Image as ImageIcon, X } from 'lucide-react';
+import { ClipboardPaste, Image as ImageIcon, Trash2, UploadCloud, X } from 'lucide-react';
 import type { AccountPublic } from '@trade/shared';
 import { api, json, money, num } from '../api';
 
@@ -8,8 +8,13 @@ type JournalRow = {
   id:number; account_id:number|null; legacy_account:string|null; occurred_at:string; symbol:string; side:string|null; order_type:string|null;
   trigger_price:number|null; entry_price:number|null; exit_price:number|null; stop_loss:number|null; take_profit:number|null; quantity:number|null;
   point_type:number|null; price_level:number|null; status:number|null; rr:number|null; style:number|null; note:string|null; chart_path:string|null;
-  exchange:string|null; pnl:number|null; fees:number|null; setup:string|null; tags_json:string|null; execution_quality:string|null;
+  exchange:string|null; pnl:number|null; fees:number|null; setup:string|null; tags_json:string|null; execution_quality:string|null; image_count?:number|null;
 };
+
+type JournalImage={id:number;journal_order_id:number;kind:'before'|'entry'|'management'|'exit'|'other';path:string;original_name:string|null;mime:string;size_bytes:number;created_at:string};
+const shotKinds=[['before','Before'],['entry','Entry'],['management','Management'],['exit','Exit'],['other','Other']] as const;
+const kindLabel=(kind:string)=>shotKinds.find(x=>x[0]===kind)?.[1]||kind;
+const fileToBase64=(file:File)=>new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onerror=()=>reject(reader.error||new Error('Could not read image'));reader.onload=()=>{const value=String(reader.result||'');resolve(value.includes(',')?value.slice(value.indexOf(',')+1):value);};reader.readAsDataURL(file);});
 
 const styleMap:Record<number,string>={0:'—',1:'Breakout',2:'LP',3:'Rebound'};
 const statusMap:Record<number,string>={0:'New',1:'Filled',2:'Cancelled'};
@@ -22,10 +27,14 @@ export default function JournalPage(){
   const qc=useQueryClient();
   const[tab,setTab]=useState<'trades'|'analytics'>('trades');
   const[account,setAccount]=useState(0);const[symbol,setSymbol]=useState('');const[side,setSide]=useState('');const[style,setStyle]=useState('');const[status,setStatus]=useState('');const[pointType,setPointType]=useState('');const[dateFrom,setDateFrom]=useState('');const[dateTo,setDateTo]=useState('');
-  const[selected,setSelected]=useState<JournalRow|null>(null);const[image,setImage]=useState<string|null>(null);
+  const[selected,setSelected]=useState<JournalRow|null>(null);const[image,setImage]=useState<string|null>(null);const[shotKind,setShotKind]=useState<JournalImage['kind']>('before');const[dropActive,setDropActive]=useState(false);
+  const fileInput=useRef<HTMLInputElement|null>(null);
   const config=useQuery<{accounts:AccountPublic[]}>({queryKey:['config'],queryFn:()=>api('/api/config')});
   const q=useQuery<JournalRow[]>({queryKey:['journal-all'],queryFn:()=>api('/api/journal?limit=1000')});
+  const images=useQuery<JournalImage[]>({queryKey:['journal-images',selected?.id],queryFn:()=>api(`/api/journal/${selected!.id}/images`),enabled:Boolean(selected)});
   const update=useMutation({mutationFn:({id,patch}:{id:number;patch:any})=>api<JournalRow>(`/api/journal/${id}`,json('PATCH',patch)),onSuccess:(row)=>{setSelected(row);void qc.invalidateQueries({queryKey:['journal-all']});}});
+  const uploadImages=useMutation({mutationFn:async({files,kind}:{files:File[];kind:JournalImage['kind']})=>{if(!selected)throw new Error('Select a journal trade first');for(const file of files){if(!['image/png','image/jpeg','image/webp'].includes(file.type))throw new Error('Only PNG, JPEG and WEBP images are allowed');if(file.size>8*1024*1024)throw new Error(`${file.name} is larger than 8 MB`);const dataBase64=await fileToBase64(file);await api(`/api/journal/${selected.id}/images`,json('POST',{kind,name:file.name,mime:file.type,dataBase64}));}},onSuccess:()=>{void qc.invalidateQueries({queryKey:['journal-images',selected?.id]});void qc.invalidateQueries({queryKey:['journal-all']});}});
+  const deleteImage=useMutation({mutationFn:(id:number)=>api(`/api/journal/images/${id}`,{method:'DELETE'}),onSuccess:()=>{void qc.invalidateQueries({queryKey:['journal-images',selected?.id]});void qc.invalidateQueries({queryKey:['journal-all']});}});
 
   const accountNames=useMemo(()=>Object.fromEntries((config.data?.accounts||[]).map(a=>[a.id,a.name])),[config.data]);
   const rows=useMemo(()=>{return(q.data||[]).filter(r=>{
@@ -51,6 +60,8 @@ export default function JournalPage(){
 
   const patch=(values:any)=>{if(selected)update.mutate({id:selected.id,patch:values});};
   const tags=selected?parseTags(selected.tags_json):[];
+  const acceptFiles=(files:File[])=>{const list=files.filter(Boolean);if(list.length)uploadImages.mutate({files:list,kind:shotKind});};
+  useEffect(()=>{if(!selected)return;const onPaste=(event:ClipboardEvent)=>{const fromItems=Array.from(event.clipboardData?.items||[]).filter(item=>item.kind==='file'&&item.type.startsWith('image/')).map(item=>item.getAsFile()).filter((file):file is File=>Boolean(file));const pasted=fromItems.length?fromItems:Array.from(event.clipboardData?.files||[]).filter(f=>f.type.startsWith('image/'));if(!pasted.length)return;event.preventDefault();acceptFiles(pasted);};window.addEventListener('paste',onPaste);return()=>window.removeEventListener('paste',onPaste);},[selected,shotKind]);
 
   return <div className="page journal-page">
     <div className="page-head"><div><h1>Journal</h1><p>Trading diary, review and R-based analytics. Legacy notes and screenshots are preserved.</p></div></div>
@@ -75,7 +86,7 @@ export default function JournalPage(){
     </div>
 
     {tab==='trades'?<div className="card table-card journal-table-card"><table className="data-table journal-table"><thead><tr><th>Date</th><th>Exchange</th><th>Account</th><th>Symbol</th><th>Side</th><th>Entry</th><th>SL</th><th>TP / Exit</th><th>R</th><th>Style</th><th>Setup</th><th>Status</th><th></th></tr></thead><tbody>{rows.map(r=><tr key={r.id} onClick={()=>setSelected(r)}>
-      <td>{r.occurred_at}</td><td>{String(r.exchange||'bybit').toUpperCase()}</td><td>{accountNames[r.account_id||0]||r.legacy_account||`Account ${r.account_id||'—'}`}</td><td><b>{r.symbol}</b>{r.chart_path&&<button className="journal-chart-icon" onClick={e=>{e.stopPropagation();setImage(`/charts/${r.chart_path}`);}} title="Open chart"><ImageIcon size={13}/></button>}</td><td className={r.side==='Buy'?'positive':'negative'}>{r.side}</td><td>{num(r.entry_price||0,8)}</td><td>{num(r.stop_loss||0,8)}</td><td>{num(r.exit_price||r.take_profit||0,8)}</td><td><span className={`rr-chip ${Number(r.rr)>0?'win':Number(r.rr)<0?'loss':''}`}>{Number(r.rr)>0?'+':''}{Number(r.rr||0)}R</span></td><td>{styleMap[Number(r.style||0)]||'—'}</td><td>{r.setup||'—'}</td><td>{statusMap[Number(r.status||0)]||r.status}</td><td>{r.note?'📝':''}</td>
+      <td>{r.occurred_at}</td><td>{String(r.exchange||'bybit').toUpperCase()}</td><td>{accountNames[r.account_id||0]||r.legacy_account||`Account ${r.account_id||'—'}`}</td><td><b>{r.symbol}</b>{Boolean(r.chart_path||Number(r.image_count||0)>0)&&<button className="journal-chart-icon" onClick={e=>{e.stopPropagation();setSelected(r);}} title="Open screenshots"><ImageIcon size={13}/><span>{Number(r.image_count||0)+(r.chart_path?1:0)}</span></button>}</td><td className={r.side==='Buy'?'positive':'negative'}>{r.side}</td><td>{num(r.entry_price||0,8)}</td><td>{num(r.stop_loss||0,8)}</td><td>{num(r.exit_price||r.take_profit||0,8)}</td><td><span className={`rr-chip ${Number(r.rr)>0?'win':Number(r.rr)<0?'loss':''}`}>{Number(r.rr)>0?'+':''}{Number(r.rr||0)}R</span></td><td>{styleMap[Number(r.style||0)]||'—'}</td><td>{r.setup||'—'}</td><td>{statusMap[Number(r.status||0)]||r.status}</td><td>{r.note?'📝':''}</td>
     </tr>)}</tbody></table>{!rows.length&&<div className="empty">No journal entries for the selected filters.</div>}</div>:
     <div className="analytics-grid"><section className="card analytics-card"><h3>Performance</h3><div className="kv"><span>Average winner</span><b>+{metrics.avgWin.toFixed(2)}R</b></div><div className="kv"><span>Average loser</span><b>{metrics.avgLoss.toFixed(2)}R</b></div><div className="kv"><span>Expectancy / trade</span><b>{metrics.avg>=0?'+':''}{metrics.avg.toFixed(2)}R</b></div><div className="kv"><span>Net result</span><b className={metrics.net>=0?'positive':'negative'}>{metrics.net>=0?'+':''}{metrics.net.toFixed(2)}R</b></div></section>
     {([['By trading style',breakdowns.style],['By account',breakdowns.account],['Long / Short',breakdowns.side],['By entry type',breakdowns.point],['By setup',breakdowns.setup]] as const).map(([title,data])=><section key={title} className="card analytics-card analytics-wide"><h3>{title}</h3><table className="data-table"><thead><tr><th>Group</th><th>Trades</th><th>Winrate</th><th>Net R</th><th>Avg R</th></tr></thead><tbody>{data.map(x=>{const decided=x.wins+x.losses;return<tr key={x.name}><td>{x.name}</td><td>{x.trades}</td><td>{decided?(x.wins/decided*100).toFixed(1):'0.0'}%</td><td className={x.net>=0?'positive':'negative'}>{x.net>=0?'+':''}{x.net.toFixed(2)}R</td><td>{x.trades?(x.net/x.trades).toFixed(2):'0.00'}R</td></tr>})}</tbody></table></section>)}</div>}
@@ -88,7 +99,18 @@ export default function JournalPage(){
       <div className="field"><label>Tags · comma separated</label><input className="input" value={tags.join(', ')} placeholder="FOMO, daily level, high volume" onChange={e=>setSelected({...selected,tags_json:JSON.stringify(e.target.value.split(',').map(x=>x.trim()).filter(Boolean))})} onBlur={e=>patch({tags:e.target.value.split(',').map(x=>x.trim()).filter(Boolean)})}/></div>
       <div className="field"><label>Notes</label><textarea className="input journal-note" value={selected.note||''} placeholder="What was the idea? What went well? What should change next time?" onChange={e=>setSelected({...selected,note:e.target.value})} onBlur={e=>patch({note:e.target.value||null})}/></div>
       </div>
-      {selected.chart_path&&<div className="drawer-section"><h3>Chart</h3><button className="journal-screenshot" onClick={()=>setImage(`/charts/${selected.chart_path}`)}><img src={`/charts/${selected.chart_path}`} alt="Trade chart"/></button></div>}
+      <div className="drawer-section journal-images-section"><div className="journal-images-title"><div><h3>Screenshots</h3><p>Upload, drag an image here, or press Ctrl+V after making a Print Screen.</p></div><select className="select journal-kind-select" value={shotKind} onChange={e=>setShotKind(e.target.value as JournalImage['kind'])}>{shotKinds.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></div>
+        <input ref={fileInput} className="journal-file-input" type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={e=>{acceptFiles(Array.from(e.target.files||[]));e.currentTarget.value='';}}/>
+        <button type="button" className={`journal-dropzone ${dropActive?'active':''}`} onClick={()=>fileInput.current?.click()} onDragEnter={e=>{e.preventDefault();setDropActive(true);}} onDragOver={e=>e.preventDefault()} onDragLeave={e=>{e.preventDefault();if(e.currentTarget===e.target)setDropActive(false);}} onDrop={e=>{e.preventDefault();setDropActive(false);acceptFiles(Array.from(e.dataTransfer.files).filter(f=>f.type.startsWith('image/')));}}>
+          <UploadCloud size={20}/><span><b>{uploadImages.isPending?'Uploading…':'Add screenshot'}</b><small>PNG / JPG / WEBP · up to 8 MB</small></span><span className="journal-paste-hint"><ClipboardPaste size={14}/> Ctrl+V</span>
+        </button>
+        {uploadImages.error&&<div className="journal-upload-error">{uploadImages.error instanceof Error?uploadImages.error.message:'Upload failed'}</div>}
+        <div className="journal-image-grid">
+          {selected.chart_path&&<article className="journal-image-card legacy"><button className="journal-image-preview" onClick={()=>setImage(`/charts/${selected.chart_path}`)}><img src={`/charts/${selected.chart_path}`} alt="Legacy trade chart"/></button><div className="journal-image-meta"><span>Legacy</span><small>Original screenshot</small></div></article>}
+          {(images.data||[]).map(item=><article className="journal-image-card" key={item.id}><button className="journal-image-preview" onClick={()=>setImage(`/charts/${item.path}`)}><img src={`/charts/${item.path}`} alt={`${kindLabel(item.kind)} screenshot`}/></button><div className="journal-image-meta"><span>{kindLabel(item.kind)}</span><small>{item.original_name||new Date(item.created_at).toLocaleString()}</small></div><button className="journal-image-delete" disabled={deleteImage.isPending} onClick={()=>{if(window.confirm('Delete this screenshot?'))deleteImage.mutate(item.id);}} title="Delete screenshot"><Trash2 size={13}/></button></article>)}
+        </div>
+        {!selected.chart_path&&!images.isLoading&&!(images.data||[]).length&&<div className="journal-images-empty">No screenshots yet. The easiest way: take a Print Screen and press <b>Ctrl+V</b>.</div>}
+      </div>
     </aside>}
     {image&&<div className="image-modal" onClick={()=>setImage(null)}><img src={image}/></div>}
   </div>;

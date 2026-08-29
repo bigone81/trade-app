@@ -88,6 +88,19 @@ CREATE TABLE IF NOT EXISTS journal_orders (
 CREATE INDEX IF NOT EXISTS idx_journal_symbol ON journal_orders(symbol);
 CREATE INDEX IF NOT EXISTS idx_journal_account ON journal_orders(account_id);
 
+CREATE TABLE IF NOT EXISTS journal_images (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  journal_order_id INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'other' CHECK(kind IN ('before','entry','management','exit','other')),
+  path TEXT NOT NULL UNIQUE,
+  original_name TEXT,
+  mime TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(journal_order_id) REFERENCES journal_orders(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_journal_images_order ON journal_images(journal_order_id, created_at);
+
 CREATE TABLE IF NOT EXISTS system_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   severity TEXT NOT NULL DEFAULT 'info',
@@ -216,9 +229,30 @@ export function listJournal(db:SqliteDb, filters:{accountId?:number;symbol?:stri
   if(filters.symbol){c.push('symbol=?');p.push(filters.symbol.toUpperCase());}
   const where=c.length?`WHERE ${c.join(' AND ')}`:'';
   p.push(Math.min(filters.limit??200,1000));
-  return db.prepare(`SELECT * FROM journal_orders ${where} ORDER BY occurred_at DESC LIMIT ?`).all(...p);
+  return db.prepare(`SELECT journal_orders.*, (SELECT COUNT(*) FROM journal_images WHERE journal_order_id=journal_orders.id) AS image_count FROM journal_orders ${where} ORDER BY occurred_at DESC LIMIT ?`).all(...p);
 }
 
+export type JournalImage = {
+  id:number; journal_order_id:number; kind:'before'|'entry'|'management'|'exit'|'other'; path:string; original_name:string|null; mime:string; size_bytes:number; created_at:string;
+};
+
+export function listJournalImages(db:SqliteDb,journalOrderId:number):JournalImage[]{
+  return db.prepare('SELECT * FROM journal_images WHERE journal_order_id=? ORDER BY created_at,id').all(journalOrderId) as JournalImage[];
+}
+
+export function createJournalImage(db:SqliteDb,input:{journalOrderId:number;kind:JournalImage['kind'];path:string;originalName?:string|null;mime:string;sizeBytes:number}):JournalImage|null{
+  const order=db.prepare('SELECT id FROM journal_orders WHERE id=?').get(input.journalOrderId);
+  if(!order)return null;
+  const result=db.prepare('INSERT INTO journal_images(journal_order_id,kind,path,original_name,mime,size_bytes) VALUES(?,?,?,?,?,?)')
+    .run(input.journalOrderId,input.kind,input.path,input.originalName??null,input.mime,input.sizeBytes);
+  return db.prepare('SELECT * FROM journal_images WHERE id=?').get(Number(result.lastInsertRowid)) as JournalImage;
+}
+
+export function getJournalImage(db:SqliteDb,id:number):JournalImage|null{
+  return (db.prepare('SELECT * FROM journal_images WHERE id=?').get(id) as JournalImage|undefined)??null;
+}
+
+export function deleteJournalImage(db:SqliteDb,id:number){return db.prepare('DELETE FROM journal_images WHERE id=?').run(id).changes>0;}
 
 export function updateJournalOrder(db:SqliteDb,id:number,input:{rr?:number;style?:number;status?:number;note?:string|null;setup?:string|null;tags?:string[];executionQuality?:string|null;exitPrice?:number|null;pnl?:number|null;fees?:number|null}){
   const current:any=db.prepare('SELECT * FROM journal_orders WHERE id=?').get(id);
