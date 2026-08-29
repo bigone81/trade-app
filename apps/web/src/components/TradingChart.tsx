@@ -317,7 +317,7 @@ export default function TradingChart(p: Props) {
         const prefs = rrPreferencesRef.current;
         if (prefs.snapToLevels) {
           const rawY = s.priceToCoordinate(point.price);
-          let snapped = point.price;
+          let snapped: number = Number(point.price);
           let bestDistance = prefs.snapPixels + 1;
           if (rawY !== null) for (const candidate of snapPricesRef.current) {
             const y = s.priceToCoordinate(candidate);
