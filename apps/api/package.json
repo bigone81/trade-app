@@ -15,7 +15,13 @@
     "@trade/shared": "workspace:*",
     "bybit-api": "^4.7.4",
     "fastify": "^5.0.0",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "@trade/exchanges-core": "workspace:*",
+    "@trade/exchanges-bybit": "workspace:*"
   },
-  "devDependencies": {"@types/node": "^24.0.0", "tsx": "^4.20.0", "typescript": "^5.9.0"}
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
 }

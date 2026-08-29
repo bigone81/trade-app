@@ -18,8 +18,10 @@ const notesPath=join(logs,'notes.json');const notes=existsSync(notesPath)?JSON.p
 const uploads=join(logs,'uploads');const images=existsSync(uploads)?readdirSync(uploads):[];
 const insert=db.prepare(`INSERT OR IGNORE INTO journal_orders(legacy_key,legacy_account,account_id,occurred_at,symbol,side,order_type,trigger_price,entry_price,stop_loss,take_profit,quantity,point_type,price_level,status,rr,style,note,chart_path,raw_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
 let imported=0,skipped=0,copied=0;
-for(let accountId=1;accountId<=5;accountId++){
- const p=join(logs,`orders_account${accountId}.json`);if(!existsSync(p))continue;
+const orderFiles=readdirSync(logs).map(name=>({name,match:/^orders_account(\d+)\.json$/.exec(name)})).filter(x=>x.match).sort((a,b)=>Number(a.match[1])-Number(b.match[1]));
+for(const file of orderFiles){
+ const accountId=Number(file.match[1]);
+ const p=join(logs,file.name);
  const rows=JSON.parse(readFileSync(p,'utf8'));for(const row of rows){
   const stamp=String(row.date||'').replace(' ','T').replaceAll(':','-');const key=`${stamp}_${row.Ticker}_${accountId}`;
   const image=images.find(name=>name.startsWith(key+'.')||name.startsWith(key+'_')||name.replace(/\.[^.]+$/,'')===key) || images.find(name=>name.startsWith(key));

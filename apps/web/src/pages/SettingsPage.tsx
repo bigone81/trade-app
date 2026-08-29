@@ -43,7 +43,11 @@ export default function SettingsPage() {
   };
 
   const accounts = config.data?.accounts || [];
-  const configuredCount = useMemo(() => accounts.filter((a) => a.configured).length, [accounts]);
+  const exchangeGroups = useMemo(() => {
+    const groups = new Map<string, AccountPublic[]>();
+    for (const account of accounts) groups.set(account.exchange, [...(groups.get(account.exchange) || []), account]);
+    return [...groups.entries()];
+  }, [accounts]);
 
   return (
     <div className="page settings-page">
@@ -116,6 +120,7 @@ export default function SettingsPage() {
             <div className="field">
               <label>Default account</label>
               <select className="select" value={preferences.defaultAccountId} onChange={(e) => save({ ...preferences, defaultAccountId: Number(e.target.value) })}>
+                <option value={0}>First available account</option>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}{a.demo ? ' · demo' : ''}</option>)}
               </select>
             </div>
@@ -156,11 +161,14 @@ export default function SettingsPage() {
 
         <section className="card settings-card">
           <h3>Exchanges & accounts</h3>
-          <div className="exchange-heading"><strong>BYBIT</strong><span>{configuredCount}/{accounts.length} configured</span></div>
-          {accounts.map((a) => (
-            <div className="kv" key={a.id}><span>{a.name}</span><b>{a.configured ? 'configured' : 'no keys'} · {a.demo ? 'demo' : 'prod'}</b></div>
-          ))}
-          <div className="exchange-placeholder">Architecture is provider-ready. Binance / OKX adapters can be added later without changing Chart, Journal or Calculator.</div>
+          {exchangeGroups.map(([exchange, rows]) => <div key={exchange}>
+            <div className="exchange-heading"><strong>{exchange.toUpperCase()}</strong><span>{rows.filter((a) => a.configured).length}/{rows.length} configured</span></div>
+            {rows.map((a) => (
+              <div className="kv" key={a.id}><span>{a.name}</span><b>#{a.id} · {a.market} · {a.configured ? 'configured' : 'no keys'} · {a.environment}</b></div>
+            ))}
+          </div>)}
+          {!exchangeGroups.length && <div className="empty">No exchange accounts registered.</div>}
+          <div className="exchange-placeholder">Accounts are loaded from the SQLite registry. Binance / OKX adapters can be added later without changing Chart, Journal or Calculator.</div>
         </section>
 
         <section className="card settings-card notifications-settings-card">

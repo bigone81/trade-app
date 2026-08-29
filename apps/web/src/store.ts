@@ -46,7 +46,7 @@ export const useUi = create<UiState>((set) => ({
   tool: 'select',
   drawerOpen: false,
   selectedRiskReward: null,
-  selectedAccountId: 2,
+  selectedAccountId: 0,
 
   calculatorPriceLevel: null,
   calculatorPriceLevelSeq: 0,

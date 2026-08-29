@@ -6,13 +6,20 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, recordJournalBybitExecution, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
-import { accounts, appConfig, publicAccounts } from './config.js';
-import { getAccountBalance, getCandles, getExecutions, getOrders, getPositions, getPrivateClient, getTickers, normalizePrice, normalizeQty } from './bybit.js';
+import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getExchangeAccount, getJournalImage, getNotificationSettings, listAlerts, listExchangeAccounts, listJournal, listJournalImages, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, recordJournalBybitExecution, resolveExchangeAccountRuntime, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
+import { appConfig } from './config.js';
+import { BybitAdapter } from '@trade/exchanges-bybit';
 
 const app=Fastify({logger:{redact:['req.headers.authorization','*.key','*.secret','*.apiKey','*.apiSecret']}});
 const db=openDatabase(appConfig.databasePath);
 mkdirSync(appConfig.chartsDir,{recursive:true});
+
+const bybit=new BybitAdapter((accountId)=>resolveExchangeAccountRuntime(db,accountId));
+const accounts=()=>listExchangeAccounts(db);
+const publicAccounts=()=>accounts().map(({id,exchange,market,name,environment,demo,configured,enabled})=>({id,exchange,market,name,environment,demo,configured,enabled}));
+const accountById=(id:number)=>{const account=getExchangeAccount(db,id);if(!account)throw new Error(`Unknown exchange account ${id}`);return account;};
+const adapterFor=(id:number)=>{const account=accountById(id);if(account.exchange==='bybit')return bybit;throw new Error(`Exchange ${account.exchange} is not supported yet`);};
+
 
 app.addHook('onRequest', async (req, reply) => {
   if(req.url==='/api/health' || !appConfig.username || !appConfig.password) return;
@@ -25,10 +32,10 @@ app.addHook('onRequest', async (req, reply) => {
 app.get('/api/health',async()=>({status:'ok',liveTradingEnabled:appConfig.liveTradingEnabled}));
 app.get('/api/config',async()=>({accounts:publicAccounts(),liveTradingEnabled:appConfig.liveTradingEnabled,defaultSymbol:appConfig.defaultSymbol,defaultTimeframe:appConfig.defaultTimeframe,telegramConfigured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID)}));
 
-app.get('/api/market/tickers',async()=>getTickers());
-app.get('/api/market/candles',async(req)=>{const q=z.object({symbol:z.string().min(2).max(30),interval:z.string().default('15'),limit:z.coerce.number().int().min(30).max(1000).default(300)}).parse(req.query);return getCandles(q.symbol,q.interval,q.limit);});
-app.get('/api/market/levels',async(req)=>{const q=z.object({symbol:z.string(),interval:z.string().default('D')}).parse(req.query);const candles=await getCandles(q.symbol,q.interval,30);return detectLevels(candles);});
-app.get('/api/market/atr',async(req)=>{const q=z.object({symbol:z.string(),interval:z.string().default('D'),period:z.coerce.number().int().min(2).max(100).default(14)}).parse(req.query);const candles=await getCandles(q.symbol,q.interval,Math.max(q.period+2,30));const tr:number[]=[];for(let i=1;i<candles.length;i++){const c=candles[i]!,p=candles[i-1]!;tr.push(Math.max(c.high-c.low,Math.abs(c.high-p.close),Math.abs(c.low-p.close)));}return {symbol:q.symbol.toUpperCase(),atr:tr.slice(-q.period).reduce((a,b)=>a+b,0)/Math.max(1,Math.min(q.period,tr.length))};});
+app.get('/api/market/tickers',async()=>bybit.getTickers());
+app.get('/api/market/candles',async(req)=>{const q=z.object({symbol:z.string().min(2).max(30),interval:z.string().default('15'),limit:z.coerce.number().int().min(30).max(1000).default(300)}).parse(req.query);return bybit.getCandles(q.symbol,q.interval,q.limit);});
+app.get('/api/market/levels',async(req)=>{const q=z.object({symbol:z.string(),interval:z.string().default('D')}).parse(req.query);const candles=await bybit.getCandles(q.symbol,q.interval,30);return detectLevels(candles);});
+app.get('/api/market/atr',async(req)=>{const q=z.object({symbol:z.string(),interval:z.string().default('D'),period:z.coerce.number().int().min(2).max(100).default(14)}).parse(req.query);const candles=await bybit.getCandles(q.symbol,q.interval,Math.max(q.period+2,30));const tr:number[]=[];for(let i=1;i<candles.length;i++){const c=candles[i]!,p=candles[i-1]!;tr.push(Math.max(c.high-c.low,Math.abs(c.high-p.close),Math.abs(c.low-p.close)));}return {symbol:q.symbol.toUpperCase(),atr:tr.slice(-q.period).reduce((a,b)=>a+b,0)/Math.max(1,Math.min(q.period,tr.length))};});
 
 app.get('/api/drawings/levels',async(req)=>{const q=z.object({symbol:z.string()}).parse(req.query);return listManualLevels(db,q.symbol);});
 app.post('/api/drawings/levels',async(req,reply)=>{const body=z.object({symbol:z.string(),price:z.number().positive(),label:z.string().max(100).nullable().optional()}).parse(req.body);reply.code(201);return createManualLevel(db,body);});
@@ -46,25 +53,26 @@ app.patch('/api/alerts/:id',async(req,reply)=>{const id=z.coerce.number().parse(
 app.patch('/api/alerts/:id/active',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);const b=z.object({active:z.boolean()}).parse(req.body);return setAlertActive(db,id,b.active)?{ok:true}:reply.code(404).send({error:'Not found'});});
 app.delete('/api/alerts/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);return deleteAlert(db,id)?{ok:true}:reply.code(404).send({error:'Not found'});});
 
-app.get('/api/journal',async(req)=>{const q=z.object({accountId:z.coerce.number().int().min(1).max(5).optional(),symbol:z.string().optional(),limit:z.coerce.number().int().optional()}).parse(req.query);return listJournal(db,q);});
+app.get('/api/journal',async(req)=>{const q=z.object({accountId:z.coerce.number().int().positive().optional(),symbol:z.string().optional(),limit:z.coerce.number().int().optional()}).parse(req.query);return listJournal(db,q);});
 app.patch('/api/journal/:id',async(req,reply)=>{const id=z.coerce.number().int().positive().parse((req.params as any).id);const b=z.object({rr:z.number().min(-100).max(100).optional(),style:z.number().int().min(0).max(99).optional(),status:z.number().int().min(0).max(99).optional(),note:z.string().max(20000).nullable().optional(),setup:z.string().max(200).nullable().optional(),tags:z.array(z.string().max(80)).max(30).optional(),executionQuality:z.string().max(80).nullable().optional(),exitPrice:z.number().min(0).nullable().optional(),pnl:z.number().nullable().optional(),fees:z.number().min(0).nullable().optional()}).parse(req.body);const row=updateJournalOrder(db,id,b);if(!row)return reply.code(404).send({error:'Not found'});return row;});
 
 app.post('/api/journal/sync',async(req)=>{
-  const q=z.object({accountId:z.coerce.number().int().min(1).max(5).optional()}).parse(req.query);
-  const ids=q.accountId?[q.accountId]:accounts.filter(a=>a.configured).map(a=>a.id);
+  const q=z.object({accountId:z.coerce.number().int().positive().optional()}).parse(req.query);
+  const ids=q.accountId?[q.accountId]:accounts().filter(a=>a.enabled&&a.configured).map(a=>a.id);
   let ordersSynced=0,executionsSynced=0;
   const details:any[]=[];
   for(const id of ids){
-    const account=accounts.find(a=>a.id===id);if(!account)continue;
+    const account=getExchangeAccount(db,id);if(!account)continue;
     try{
-      const [active,history,executions]=await Promise.all([getOrders(id,false),getOrders(id,true),getExecutions(id)]);
+      const adapter=adapterFor(id);
+      const [active,history,executions]=await Promise.all([adapter.getOrders(id,false),adapter.getOrders(id,true),adapter.getExecutions(id)]);
       const byId=new Map<string,any>();for(const o of [...history,...active])if(o.orderId)byId.set(o.orderId,o);
       const appOrders=[...byId.values()].filter(o=>String(o.orderLinkId||'').startsWith('tradev2-')&&!o.reduceOnly);
       for(const o of appOrders){syncJournalBybitOrder(db,{accountId:id,accountName:account.name,order:o});ordersSynced++;}
       const allowed=new Set(appOrders.map(o=>o.orderId));
       for(const x of executions){if(!allowed.has(x.orderId))continue;recordJournalBybitExecution(db,{accountId:id,accountName:account.name,execution:x});executionsSynced++;}
-      details.push({accountId:id,accountName:account.name,ok:true,orders:appOrders.length,executions:executions.filter(x=>allowed.has(x.orderId)).length});
-    }catch(e){details.push({accountId:id,accountName:account.name,ok:false,error:e instanceof Error?e.message:String(e)});}
+      details.push({accountId:id,accountName:account.name,exchange:account.exchange,ok:true,orders:appOrders.length,executions:executions.filter(x=>allowed.has(x.orderId)).length});
+    }catch(e){details.push({accountId:id,accountName:account.name,exchange:account.exchange,ok:false,error:e instanceof Error?e.message:String(e)});}
   }
   return {ok:true,ordersSynced,executionsSynced,details};
 });
@@ -130,43 +138,102 @@ app.post('/api/notifications/test',async(req,reply)=>{
   return row;
 });
 
-async function accountIds(value:unknown){const q=z.coerce.number().int().min(1).max(5).optional().parse(value);return q?[q]:accounts.filter(a=>a.configured).map(a=>a.id);}
-app.get('/api/trade/summary',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return Promise.all(ids.map(async id=>{try{const [balance,positions,orders]=await Promise.all([getAccountBalance(id),getPositions(id),getOrders(id)]);return {...balance,positions:positions.length,orders:orders.length,unrealisedPnl:positions.reduce((s,p)=>s+p.unrealisedPnl,0),online:true};}catch(e){return {accountId:id,accountName:accounts.find(a=>a.id===id)?.name,online:false,error:e instanceof Error?e.message:String(e)};}}));});
-app.get('/api/trade/positions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>getPositions(id).catch(()=>[])))).flat();});
-app.get('/api/trade/orders',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>getOrders(id,false).catch(()=>[])))).flat();});
-app.get('/api/trade/executions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>getExecutions(id).catch(()=>[])))).flat();});
-app.get('/api/trade/history',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>getOrders(id,true).catch(()=>[])))).flat();});
+async function accountIds(value:unknown){
+  const q=z.coerce.number().int().positive().optional().parse(value);
+  if(q){accountById(q);return [q];}
+  return accounts().filter(a=>a.enabled&&a.configured).map(a=>a.id);
+}
+app.get('/api/trade/summary',async(req)=>{
+  const ids=await accountIds((req.query as any)?.accountId);
+  return Promise.all(ids.map(async id=>{
+    const account=getExchangeAccount(db,id);
+    try{
+      const adapter=adapterFor(id);
+      const [balance,positions,orders]=await Promise.all([adapter.getAccountBalance(id),adapter.getPositions(id),adapter.getOrders(id)]);
+      return {...balance,exchange:account?.exchange,positions:positions.length,orders:orders.length,unrealisedPnl:positions.reduce((sum,p)=>sum+p.unrealisedPnl,0),online:true};
+    }catch(e){return {accountId:id,accountName:account?.name,exchange:account?.exchange,online:false,error:e instanceof Error?e.message:String(e)};}
+  }));
+});
+app.get('/api/trade/positions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getPositions(id).catch(()=>[])))).flat();});
+app.get('/api/trade/orders',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getOrders(id,false).catch(()=>[])))).flat();});
+app.get('/api/trade/executions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getExecutions(id).catch(()=>[])))).flat();});
+app.get('/api/trade/history',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getOrders(id,true).catch(()=>[])))).flat();});
 
 const requireLive=(reply:any)=>{if(!appConfig.liveTradingEnabled){reply.code(423).send({error:'Live trading actions are disabled. Set LIVE_TRADING_ENABLED=true explicitly.'});return false;}return true;};
-const bybitOk=(reply:any,r:any)=>{if(Number(r?.retCode)!==0){reply.code(400).send({error:r?.retMsg||'Bybit rejected the request',retCode:r?.retCode});return false;}return true;};
+const exchangeOk=(reply:any,r:any)=>{if(Number(r?.retCode)!==0){reply.code(400).send({error:r?.retMsg||'Exchange rejected the request',retCode:r?.retCode});return false;}return true;};
 const sleep=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 const asPositionIdx=(value:number):0|1|2=>{if(value===1)return 1;if(value===2)return 2;return 0;};
-async function waitOrdersGone(accountId:number,symbol:string,timeoutMs=5000){const end=Date.now()+timeoutMs;while(Date.now()<end){const open=(await getOrders(accountId,false)).filter(o=>o.symbol===symbol);if(open.length===0)return true;await sleep(250);}return false;}
-app.post('/api/trade/orders/cancel',async(req,reply)=>{if(!requireLive(reply))return;const b=z.object({accountId:z.number().int().min(1).max(5),symbol:z.string(),orderId:z.string()}).parse(req.body);const r=await getPrivateClient(b.accountId).cancelOrder({category:'linear',symbol:b.symbol.toUpperCase(),orderId:b.orderId});appendSystemEvent(db,{eventType:'order.cancel.requested',accountId:b.accountId,symbol:b.symbol,message:`Cancel requested for ${b.orderId}`,payload:{retCode:r.retCode,retMsg:r.retMsg}});if(!bybitOk(reply,r))return;return r;});
-app.post('/api/trade/orders/cancel-all',async(req,reply)=>{if(!requireLive(reply))return;const b=z.object({accountId:z.number().int().min(1).max(5),symbol:z.string()}).parse(req.body);const r=await getPrivateClient(b.accountId).cancelAllOrders({category:'linear',symbol:b.symbol.toUpperCase()});appendSystemEvent(db,{eventType:'orders.cancel_all.requested',accountId:b.accountId,symbol:b.symbol,message:'Cancel all requested',payload:{retCode:r.retCode,retMsg:r.retMsg}});if(!bybitOk(reply,r))return;return r;});
+async function waitOrdersGone(accountId:number,symbol:string,timeoutMs=5000){const end=Date.now()+timeoutMs;while(Date.now()<end){const open=(await adapterFor(accountId).getOrders(accountId,false)).filter(o=>o.symbol===symbol);if(open.length===0)return true;await sleep(250);}return false;}
 
-app.post('/api/trade/position/stops',async(req,reply)=>{if(!requireLive(reply))return;const b=z.object({accountId:z.number().int().min(1).max(5),symbol:z.string(),positionIdx:z.number().int().default(0),stopLoss:z.number().min(0).optional(),takeProfit:z.number().min(0).optional(),trailingStop:z.number().min(0).optional()}).parse(req.body);const symbol=b.symbol.toUpperCase();const stopLoss=b.stopLoss===undefined?undefined:(b.stopLoss===0?'0':await normalizePrice(symbol,b.stopLoss));const takeProfit=b.takeProfit===undefined?undefined:(b.takeProfit===0?'0':await normalizePrice(symbol,b.takeProfit));const trailingStop=b.trailingStop===undefined?undefined:String(b.trailingStop);const r=await getPrivateClient(b.accountId).setTradingStop({category:'linear',symbol,tpslMode:'Full',positionIdx:b.positionIdx,stopLoss,takeProfit,trailingStop} as any);appendSystemEvent(db,{eventType:'position.stops.requested',accountId:b.accountId,symbol,message:'Position TP/SL update requested'});if(!bybitOk(reply,r))return;return r;});
+app.post('/api/trade/orders/cancel',async(req,reply)=>{
+  if(!requireLive(reply))return;
+  const b=z.object({accountId:z.number().int().positive(),symbol:z.string(),orderId:z.string()}).parse(req.body);
+  const adapter=adapterFor(b.accountId);
+  const r=await adapter.cancelOrder(b.accountId,{symbol:b.symbol.toUpperCase(),orderId:b.orderId});
+  appendSystemEvent(db,{eventType:'order.cancel.requested',accountId:b.accountId,symbol:b.symbol,message:`Cancel requested for ${b.orderId}`,payload:{retCode:r.retCode,retMsg:r.retMsg}});
+  if(!exchangeOk(reply,r))return;return r;
+});
+app.post('/api/trade/orders/cancel-all',async(req,reply)=>{
+  if(!requireLive(reply))return;
+  const b=z.object({accountId:z.number().int().positive(),symbol:z.string()}).parse(req.body);
+  const adapter=adapterFor(b.accountId);
+  const r=await adapter.cancelAllOrders(b.accountId,{symbol:b.symbol.toUpperCase()});
+  appendSystemEvent(db,{eventType:'orders.cancel_all.requested',accountId:b.accountId,symbol:b.symbol,message:'Cancel all requested',payload:{retCode:r.retCode,retMsg:r.retMsg}});
+  if(!exchangeOk(reply,r))return;return r;
+});
 
-app.post('/api/trade/position/close',async(req,reply)=>{if(!requireLive(reply))return;const b=z.object({accountId:z.number().int().min(1).max(5),symbol:z.string(),percent:z.number().min(1).max(100).default(100),positionIdx:z.number().int().default(0)}).parse(req.body);const positions=await getPositions(b.accountId);const p=positions.find(x=>x.symbol===b.symbol.toUpperCase()&&x.positionIdx===b.positionIdx);if(!p)return reply.code(404).send({error:'Open position not found'});const rawQty=p.size*b.percent/100;const qty=await normalizeQty(p.symbol,rawQty);if(Number(qty)<=0)return reply.code(400).send({error:'Calculated close quantity is below instrument qtyStep'});const r=await getPrivateClient(b.accountId).submitOrder({category:'linear',symbol:p.symbol,side:p.side==='Buy'?'Sell':'Buy',orderType:'Market',qty,positionIdx:asPositionIdx(p.positionIdx),reduceOnly:true});appendSystemEvent(db,{severity:'warning',eventType:'position.close.requested',accountId:b.accountId,symbol:p.symbol,message:`Market reduce-only close requested for ${b.percent}%`,payload:{qty,retCode:r.retCode,retMsg:r.retMsg}});if(!bybitOk(reply,r))return;return r;});
+app.post('/api/trade/position/stops',async(req,reply)=>{
+  if(!requireLive(reply))return;
+  const b=z.object({accountId:z.number().int().positive(),symbol:z.string(),positionIdx:z.number().int().default(0),stopLoss:z.number().min(0).optional(),takeProfit:z.number().min(0).optional(),trailingStop:z.number().min(0).optional()}).parse(req.body);
+  const adapter=adapterFor(b.accountId);const symbol=b.symbol.toUpperCase();
+  const stopLoss=b.stopLoss===undefined?undefined:(b.stopLoss===0?'0':await adapter.normalizePrice(symbol,b.stopLoss));
+  const takeProfit=b.takeProfit===undefined?undefined:(b.takeProfit===0?'0':await adapter.normalizePrice(symbol,b.takeProfit));
+  const trailingStop=b.trailingStop===undefined?undefined:String(b.trailingStop);
+  const r=await adapter.setTradingStop(b.accountId,{symbol,tpslMode:'Full',positionIdx:b.positionIdx,stopLoss,takeProfit,trailingStop});
+  appendSystemEvent(db,{eventType:'position.stops.requested',accountId:b.accountId,symbol,message:'Position TP/SL update requested'});
+  if(!exchangeOk(reply,r))return;return r;
+});
 
-app.post('/api/trade/position/flatten',async(req,reply)=>{if(!requireLive(reply))return;const b=z.object({accountId:z.number().int().min(1).max(5),symbol:z.string(),positionIdx:z.number().int().default(0)}).parse(req.body);const symbol=b.symbol.toUpperCase();const client=getPrivateClient(b.accountId);const cancel=await client.cancelAllOrders({category:'linear',symbol});if(!bybitOk(reply,cancel))return;const cleared=await waitOrdersGone(b.accountId,symbol,5000);if(!cleared){appendSystemEvent(db,{severity:'error',eventType:'position.flatten.aborted',accountId:b.accountId,symbol,message:'Flatten aborted: open orders did not clear within timeout'});return reply.code(409).send({error:'Flatten aborted because active orders are still present after Cancel All'});}const positions=await getPositions(b.accountId);const p=positions.find(x=>x.symbol===symbol&&x.positionIdx===b.positionIdx);let close:any=null;if(p){const qty=await normalizeQty(symbol,p.size);close=await client.submitOrder({category:'linear',symbol,side:p.side==='Buy'?'Sell':'Buy',orderType:'Market',qty,positionIdx:asPositionIdx(p.positionIdx),reduceOnly:true});if(!bybitOk(reply,close))return;}appendSystemEvent(db,{severity:'warning',eventType:'position.flatten.requested',accountId:b.accountId,symbol,message:'Flatten requested after active orders cleared',payload:{cancelRetCode:cancel.retCode,closeRetCode:close?.retCode}});return {cancel,close};});
+app.post('/api/trade/position/close',async(req,reply)=>{
+  if(!requireLive(reply))return;
+  const b=z.object({accountId:z.number().int().positive(),symbol:z.string(),percent:z.number().min(1).max(100).default(100),positionIdx:z.number().int().default(0)}).parse(req.body);
+  const adapter=adapterFor(b.accountId);const positions=await adapter.getPositions(b.accountId);
+  const p=positions.find(x=>x.symbol===b.symbol.toUpperCase()&&x.positionIdx===b.positionIdx);if(!p)return reply.code(404).send({error:'Open position not found'});
+  const rawQty=p.size*b.percent/100;const qty=await adapter.normalizeQty(p.symbol,rawQty);if(Number(qty)<=0)return reply.code(400).send({error:'Calculated close quantity is below instrument qtyStep'});
+  const r=await adapter.submitOrder(b.accountId,{symbol:p.symbol,side:p.side==='Buy'?'Sell':'Buy',orderType:'Market',qty,positionIdx:asPositionIdx(p.positionIdx),reduceOnly:true});
+  appendSystemEvent(db,{severity:'warning',eventType:'position.close.requested',accountId:b.accountId,symbol:p.symbol,message:`Market reduce-only close requested for ${b.percent}%`,payload:{qty,retCode:r.retCode,retMsg:r.retMsg}});
+  if(!exchangeOk(reply,r))return;return r;
+});
+
+app.post('/api/trade/position/flatten',async(req,reply)=>{
+  if(!requireLive(reply))return;
+  const b=z.object({accountId:z.number().int().positive(),symbol:z.string(),positionIdx:z.number().int().default(0)}).parse(req.body);
+  const adapter=adapterFor(b.accountId);const symbol=b.symbol.toUpperCase();
+  const cancel=await adapter.cancelAllOrders(b.accountId,{symbol});if(!exchangeOk(reply,cancel))return;
+  const cleared=await waitOrdersGone(b.accountId,symbol,5000);
+  if(!cleared){appendSystemEvent(db,{severity:'error',eventType:'position.flatten.aborted',accountId:b.accountId,symbol,message:'Flatten aborted: open orders did not clear within timeout'});return reply.code(409).send({error:'Flatten aborted because active orders are still present after Cancel All'});}
+  const positions=await adapter.getPositions(b.accountId);const p=positions.find(x=>x.symbol===symbol&&x.positionIdx===b.positionIdx);let close:any=null;
+  if(p){const qty=await adapter.normalizeQty(symbol,p.size);close=await adapter.submitOrder(b.accountId,{symbol,side:p.side==='Buy'?'Sell':'Buy',orderType:'Market',qty,positionIdx:asPositionIdx(p.positionIdx),reduceOnly:true});if(!exchangeOk(reply,close))return;}
+  appendSystemEvent(db,{severity:'warning',eventType:'position.flatten.requested',accountId:b.accountId,symbol,message:'Flatten requested after active orders cleared',payload:{cancelRetCode:cancel.retCode,closeRetCode:close?.retCode}});
+  return {cancel,close};
+});
 
 app.post('/api/trade/order',async(req,reply)=>{
   if(!requireLive(reply))return;
   const b=z.object({
-    accountId:z.number().int().min(1).max(5),symbol:z.string(),side:z.enum(['Buy','Sell']),orderType:z.enum(['Market','Limit']),qty:z.number().positive(),
+    accountId:z.number().int().positive(),symbol:z.string(),side:z.enum(['Buy','Sell']),orderType:z.enum(['Market','Limit']),qty:z.number().positive(),
     price:z.number().positive().optional(),triggerPrice:z.number().positive().optional(),stopLoss:z.number().positive().optional(),takeProfit:z.number().positive().optional(),positionIdx:z.number().int().default(0),
     pointType:z.number().int().optional(),priceLevel:z.number().positive().optional(),plannedRr:z.number().optional(),riskPercent:z.number().min(0).optional(),riskAmount:z.number().min(0).optional(),plannedEntry:z.number().positive().optional()
   }).parse(req.body);
-  const symbol=b.symbol.toUpperCase();const qty=await normalizeQty(symbol,b.qty);if(Number(qty)<=0)return reply.code(400).send({error:'Position quantity is below instrument qtyStep'});
-  const params:any={category:'linear',symbol,side:b.side,orderType:b.orderType,qty,positionIdx:b.positionIdx,timeInForce:'GTC',orderLinkId:`tradev2-${Date.now()}`};
-  if(b.orderType==='Limit'){if(!b.price)return reply.code(400).send({error:'Limit price is required'});params.price=await normalizePrice(symbol,b.price);}
-  if(b.triggerPrice){params.triggerPrice=await normalizePrice(symbol,b.triggerPrice);params.triggerDirection=b.side==='Buy'?1:2;}
-  if(b.stopLoss)params.stopLoss=await normalizePrice(symbol,b.stopLoss);if(b.takeProfit)params.takeProfit=await normalizePrice(symbol,b.takeProfit);
-  const r=await getPrivateClient(b.accountId).submitOrder(params);
-  appendSystemEvent(db,{eventType:'order.submit.requested',accountId:b.accountId,symbol,message:'Order submit requested',payload:{retCode:r.retCode,retMsg:r.retMsg,orderLinkId:params.orderLinkId}});
-  if(!bybitOk(reply,r))return;
-  const account=accounts.find(a=>a.id===b.accountId)!;
+  const account=accountById(b.accountId);const adapter=adapterFor(b.accountId);
+  const symbol=b.symbol.toUpperCase();const qty=await adapter.normalizeQty(symbol,b.qty);if(Number(qty)<=0)return reply.code(400).send({error:'Position quantity is below instrument qtyStep'});
+  const params:any={symbol,side:b.side,orderType:b.orderType,qty,positionIdx:b.positionIdx,timeInForce:'GTC',orderLinkId:`tradev2-${Date.now()}`};
+  if(b.orderType==='Limit'){if(!b.price)return reply.code(400).send({error:'Limit price is required'});params.price=await adapter.normalizePrice(symbol,b.price);}
+  if(b.triggerPrice){params.triggerPrice=await adapter.normalizePrice(symbol,b.triggerPrice);params.triggerDirection=b.side==='Buy'?1:2;}
+  if(b.stopLoss)params.stopLoss=await adapter.normalizePrice(symbol,b.stopLoss);if(b.takeProfit)params.takeProfit=await adapter.normalizePrice(symbol,b.takeProfit);
+  const r=await adapter.submitOrder(b.accountId,params);
+  appendSystemEvent(db,{eventType:'order.submit.requested',accountId:b.accountId,symbol,message:'Order submit requested',payload:{exchange:account.exchange,retCode:r.retCode,retMsg:r.retMsg,orderLinkId:params.orderLinkId}});
+  if(!exchangeOk(reply,r))return;
   upsertJournalSubmittedOrder(db,{accountId:b.accountId,accountName:account.name,symbol,side:b.side,orderType:b.triggerPrice?'Stop Limit':b.orderType,triggerPrice:b.triggerPrice??null,entryPrice:b.plannedEntry??b.price??null,stopLoss:b.stopLoss??null,takeProfit:b.takeProfit??null,quantity:Number(qty),pointType:b.pointType??null,priceLevel:b.priceLevel??null,rr:b.plannedRr??null,riskPercent:b.riskPercent??null,riskAmount:b.riskAmount??null,exchangeOrderId:String((r as any)?.result?.orderId||'')||null,orderLinkId:params.orderLinkId,reduceOnly:false,raw:{request:b,response:{retCode:r.retCode,retMsg:r.retMsg,result:(r as any).result}}});
   return r;
 });

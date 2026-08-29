@@ -2,7 +2,22 @@
   "name": "@trade/worker",
   "version": "0.1.0",
   "type": "module",
-  "scripts": {"dev": "tsx watch src/worker.ts", "build": "tsc -p tsconfig.json", "start": "node dist/worker.js", "test": "node --test dist/*.test.js || true"},
-  "dependencies": {"@trade/database": "workspace:*", "bybit-api": "^4.7.4"},
-  "devDependencies": {"@types/node": "^24.0.0", "tsx": "^4.20.0", "typescript": "^5.9.0"}
+  "scripts": {
+    "dev": "tsx watch src/worker.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/worker.js",
+    "test": "node --test dist/*.test.js || true"
+  },
+  "dependencies": {
+    "@trade/database": "workspace:*",
+    "bybit-api": "^4.7.4",
+    "@trade/exchanges-core": "workspace:*",
+    "@trade/exchanges-bybit": "workspace:*",
+    "@trade/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
 }

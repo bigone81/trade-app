@@ -1,17 +1,20 @@
-import { WebsocketClient } from 'bybit-api';
 import {
   appendSystemEvent,
   createNotification,
   getNotificationSettings,
   listAlerts,
+  listExchangeAccounts,
   markNotificationTelegram,
   openDatabase,
+  resolveExchangeAccountRuntime,
   recordJournalBybitExecution,
   syncJournalBybitOrder,
   type NotificationRecord,
 } from '@trade/database';
+import { BybitAdapter } from '@trade/exchanges-bybit';
 
 const db=openDatabase(process.env.DATABASE_PATH || './data/trade.sqlite');
+const bybit=new BybitAdapter((accountId)=>resolveExchangeAccountRuntime(db,accountId));
 const telegramToken=process.env.TELEGRAM_BOT_TOKEN || '';
 const telegramChatId=process.env.TELEGRAM_CHAT_ID || '';
 const publicUrl=(process.env.PUBLIC_APP_URL || '').replace(/\/$/,'');
@@ -32,7 +35,7 @@ async function deliverTelegram(notification:NotificationRecord|null,text:string,
   catch(e){const message=e instanceof Error?e.message:String(e);markNotificationTelegram(db,notification.id,'error',message);appendSystemEvent(db,{severity:'error',eventType:'telegram.error',accountId:notification.accountId,symbol:notification.symbol,message});}
 }
 
-const publicWs=new WebsocketClient();
+const publicWs=bybit.createPublicWebsocket();
 const subscribed=new Set<string>();
 const latest=new Map<string,number>();
 
@@ -133,10 +136,9 @@ function tradingNotification(id:number,name:string,x:any){
   void deliverTelegram(n,`${icon} <b>${title}</b>\n\nBybit · ${name}\n<b>${symbol}</b> ${x.side||''}\n${qty?`Qty: ${qty}\n`:''}${avg?`Цена: ${avg}\n`:''}Статус: ${status}`,settings.telegramTrading);
 }
 
-for(let id=1;id<=5;id++){
-  const prefix=`BYBIT_ACCOUNT${id}_`;const key=process.env[`${prefix}KEY`]||'';const secret=process.env[`${prefix}SECRET`]||'';if(!key||!secret)continue;
-  const name=process.env[`${prefix}NAME`]||`Account ${id}`;const demo=['1','true','yes','on'].includes((process.env[`${prefix}DEMO`]||'').toLowerCase());
-  const ws=new WebsocketClient({key,secret,demoTrading:demo});const connKey=`private:${id}`;const conn={title:`Bybit · ${name}`,accountId:id,accountName:name};
+for(const account of listExchangeAccounts(db,{exchange:'bybit',enabledOnly:true}).filter(a=>a.configured)){
+  const id=account.id;const name=account.name;
+  const ws=bybit.createPrivateWebsocket(id);const connKey=`private:${id}`;const conn={title:`Bybit · ${name}`,accountId:id,accountName:name};
   ws.on('open',()=>{restored(connKey,conn);appendSystemEvent(db,{eventType:'ws.private.open',accountId:id,message:`${name} private WebSocket connected`});});
   ws.on('reconnect',()=>{scheduleOffline(connKey,conn);appendSystemEvent(db,{severity:'warning',eventType:'ws.private.reconnect',accountId:id,message:`${name} private WebSocket reconnecting`});});
   ws.on('reconnected',()=>{restored(connKey,conn);appendSystemEvent(db,{eventType:'ws.private.reconnected',accountId:id,message:`${name} private WebSocket reconnected`});});

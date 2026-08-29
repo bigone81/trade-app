@@ -37,8 +37,8 @@ export default function CalculatorDrawer({
   onUpdateRiskReward,
 }: Props) {
   const { preferences } = usePreferences();
-  const [accountId, setAccountId] = useState(() => preferences.defaultAccountId || 2);
-  const [risk, setRisk] = useState(() => effectiveRiskPercent(preferences, preferences.defaultAccountId || 2));
+  const [accountId, setAccountId] = useState(() => preferences.defaultAccountId || accounts[0]?.id || 0);
+  const [risk, setRisk] = useState(() => effectiveRiskPercent(preferences, preferences.defaultAccountId || accounts[0]?.id || 0));
   const [mode, setMode] = useState<'stop' | 'limit' | 'market'>('limit');
   const [stopMode, setStopMode] = useState<'atr' | 'technical'>('technical');
   const [side, setSide] = useState<'Buy' | 'Sell'>('Buy');
@@ -110,6 +110,7 @@ export default function CalculatorDrawer({
   const summary = useQuery<any[]>({
     queryKey: ['summary', accountId],
     queryFn: () => api(`/api/trade/summary?accountId=${accountId}`),
+    enabled: accountId > 0,
     refetchInterval: 15_000,
   });
   const balance = Number(summary.data?.[0]?.equity || 0);

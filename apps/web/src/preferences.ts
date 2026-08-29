@@ -30,7 +30,7 @@ const EVENT = 'trade-settings-changed';
 export const defaultPreferences: AppPreferences = {
   theme: 'dark',
   defaultRiskPercent: 0.5,
-  defaultAccountId: 2,
+  defaultAccountId: 0,
   accountRiskPercent: {},
   manualLevel: {
     colorMode: 'auto',

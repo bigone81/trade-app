@@ -5,7 +5,7 @@ COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages ./packages
 COPY apps/worker ./apps/worker
 RUN pnpm install --frozen-lockfile=false
-RUN pnpm --filter @trade/shared build && pnpm --filter @trade/database build && pnpm --filter @trade/worker build
+RUN pnpm --filter @trade/shared build && pnpm --filter @trade/exchanges-core build && pnpm --filter @trade/exchanges-bybit build && pnpm --filter @trade/database build && pnpm --filter @trade/worker build
 
 FROM node:24-bookworm-slim
 WORKDIR /app

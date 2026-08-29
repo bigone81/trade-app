@@ -3,7 +3,7 @@ export type MarketKind = 'linear' | 'inverse' | 'spot' | 'option' | (string & {}
 export interface MarketRef { exchange: ExchangeId; market: MarketKind; symbol: string; }
 export interface ExchangeCapabilities { market:boolean; limit:boolean; stop:boolean; reduceOnly:boolean; hedgeMode:boolean; tpsl:boolean; trailingStop:boolean; privateWebsocket:boolean; }
 
-export type AccountId = 1 | 2 | 3 | 4 | 5;
+export type AccountId = number;
 export type Side = 'Buy' | 'Sell';
 export type Direction = 'long' | 'short';
 export type OrderKind = 'Market' | 'Limit';
@@ -13,9 +13,13 @@ export type DrawingTool = 'select' | 'level' | 'risk-reward' | 'alert';
 
 export interface AccountPublic {
   id: AccountId;
+  exchange: ExchangeId;
+  market: MarketKind;
   name: string;
+  environment: string;
   demo: boolean;
   configured: boolean;
+  enabled: boolean;
 }
 
 export interface ManualLevel {
