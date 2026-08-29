@@ -33,6 +33,12 @@ interface MarketTicker {
   turnover24h: number;
 }
 
+interface InstrumentRules {
+  symbol: string;
+  tickSize: string;
+  qtyStep: string;
+}
+
 const formatTurnover = (value: number) => {
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
   if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(0)}M`;
@@ -61,6 +67,12 @@ export default function ChartPage() {
     queryFn: () => api('/api/market/tickers'),
     staleTime: 8_000,
     refetchInterval: 10_000,
+  });
+
+  const instrument = useQuery<InstrumentRules>({
+    queryKey: ['instrument-rules', ui.symbol],
+    queryFn: () => api(`/api/market/instrument?symbol=${ui.symbol}`),
+    staleTime: 10 * 60_000,
   });
 
   const candles = useQuery<Candle[]>({
@@ -407,6 +419,7 @@ export default function ChartPage() {
           tool={ui.tool}
           selectedRiskReward={ui.selectedRiskReward}
           timeframe={ui.timeframe}
+          tickSize={instrument.data?.tickSize ?? null}
           onCreateLevel={(price) => addLevel.mutate(price)}
           onCreateAlert={(price) => addAlert.mutate(price)}
           onCreateRiskReward={(input) => addRR.mutate(input)}

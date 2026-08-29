@@ -33,6 +33,7 @@ interface Props {
   tool: DrawingTool;
   selectedRiskReward: RiskReward | null;
   timeframe: string;
+  tickSize: string | null;
   onCreateLevel: (price: number) => void;
   onCreateAlert: (price: number) => void;
   onCreateRiskReward: (r: Omit<RiskReward, 'id' | 'createdAt' | 'updatedAt'>) => void;
@@ -62,6 +63,30 @@ type TradingDrag = { line: TradingOverlayLine; originalPrice: number; price: num
 type WsState = 'connecting' | 'live' | 'reconnecting' | 'offline';
 
 const DEFAULT_FUTURE_BARS = 24;
+
+const decimalsFromTickSize = (tickSize: string) => {
+  const text = String(tickSize || '').trim().toLowerCase();
+  const scientific = text.match(/^([0-9]+(?:\.[0-9]+)?)e-([0-9]+)$/);
+  if (scientific) {
+    const coefficientDecimals = (scientific[1]!.split('.')[1] || '').replace(/0+$/, '').length;
+    return Math.max(0, Number(scientific[2]) + coefficientDecimals);
+  }
+  const fraction = (text.split('.')[1] || '').replace(/0+$/, '');
+  return fraction.length;
+};
+
+const chartPriceFormat = (tickSize: string | null, fallbackPrice = 0) => {
+  const minMove = Number(tickSize);
+  if (Number.isFinite(minMove) && minMove > 0) {
+    return { type: 'price' as const, precision: decimalsFromTickSize(String(tickSize)), minMove };
+  }
+
+  // Temporary fallback while instrument metadata is loading. This prevents a
+  // low-priced symbol from inheriting the previous symbol's 2-decimal format.
+  const value = Math.abs(fallbackPrice);
+  const precision = value > 0 && value < 0.01 ? 6 : value < 1 ? 4 : 2;
+  return { type: 'price' as const, precision, minMove: 10 ** -precision };
+};
 
 const rgba = (hex: string, opacity: number) => {
   const clean = hex.replace('#', '');
@@ -216,6 +241,7 @@ export default function TradingChart(p: Props) {
       downColor: '#ef6675',
       openVisible: true,
       thinBars: false,
+      priceFormat: chartPriceFormat(p.tickSize, p.candles.at(-1)?.close || 0),
     });
 
     setChart(c);
@@ -354,6 +380,12 @@ export default function TradingChart(p: Props) {
     });
     series.applyOptions({ priceLineVisible: preferences.chart.showCurrentPriceLine });
   }, [chart, series, theme, preferences.chart.showGrid, preferences.chart.showCurrentPriceLine, futureBars]);
+
+  useEffect(() => {
+    if (!series) return;
+    const fallbackPrice = p.candles.at(-1)?.close || 0;
+    series.applyOptions({ priceFormat: chartPriceFormat(p.tickSize, fallbackPrice) });
+  }, [series, p.symbol, p.tickSize, p.candles]);
 
   useEffect(() => {
     if (!chart || !hostRef.current) return;
