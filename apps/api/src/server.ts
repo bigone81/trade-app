@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, createAlert, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, listAlerts, listJournal, listJournalImages, listManualLevels, listRiskRewards, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateRiskReward, updateJournalOrder } from '@trade/database';
+import { appendSystemEvent, createAlert, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, listAlerts, listJournal, listJournalImages, listManualLevels, listRiskRewards, openDatabase, recordJournalBybitExecution, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { accounts, appConfig, publicAccounts } from './config.js';
 import { getAccountBalance, getCandles, getExecutions, getOrders, getPositions, getPrivateClient, getTickers, normalizePrice, normalizeQty } from './bybit.js';
 
@@ -48,6 +48,26 @@ app.delete('/api/alerts/:id',async(req,reply)=>{const id=z.coerce.number().parse
 
 app.get('/api/journal',async(req)=>{const q=z.object({accountId:z.coerce.number().int().min(1).max(5).optional(),symbol:z.string().optional(),limit:z.coerce.number().int().optional()}).parse(req.query);return listJournal(db,q);});
 app.patch('/api/journal/:id',async(req,reply)=>{const id=z.coerce.number().int().positive().parse((req.params as any).id);const b=z.object({rr:z.number().min(-100).max(100).optional(),style:z.number().int().min(0).max(99).optional(),status:z.number().int().min(0).max(99).optional(),note:z.string().max(20000).nullable().optional(),setup:z.string().max(200).nullable().optional(),tags:z.array(z.string().max(80)).max(30).optional(),executionQuality:z.string().max(80).nullable().optional(),exitPrice:z.number().min(0).nullable().optional(),pnl:z.number().nullable().optional(),fees:z.number().min(0).nullable().optional()}).parse(req.body);const row=updateJournalOrder(db,id,b);if(!row)return reply.code(404).send({error:'Not found'});return row;});
+
+app.post('/api/journal/sync',async(req)=>{
+  const q=z.object({accountId:z.coerce.number().int().min(1).max(5).optional()}).parse(req.query);
+  const ids=q.accountId?[q.accountId]:accounts.filter(a=>a.configured).map(a=>a.id);
+  let ordersSynced=0,executionsSynced=0;
+  const details:any[]=[];
+  for(const id of ids){
+    const account=accounts.find(a=>a.id===id);if(!account)continue;
+    try{
+      const [active,history,executions]=await Promise.all([getOrders(id,false),getOrders(id,true),getExecutions(id)]);
+      const byId=new Map<string,any>();for(const o of [...history,...active])if(o.orderId)byId.set(o.orderId,o);
+      const appOrders=[...byId.values()].filter(o=>String(o.orderLinkId||'').startsWith('tradev2-')&&!o.reduceOnly);
+      for(const o of appOrders){syncJournalBybitOrder(db,{accountId:id,accountName:account.name,order:o});ordersSynced++;}
+      const allowed=new Set(appOrders.map(o=>o.orderId));
+      for(const x of executions){if(!allowed.has(x.orderId))continue;recordJournalBybitExecution(db,{accountId:id,accountName:account.name,execution:x});executionsSynced++;}
+      details.push({accountId:id,accountName:account.name,ok:true,orders:appOrders.length,executions:executions.filter(x=>allowed.has(x.orderId)).length});
+    }catch(e){details.push({accountId:id,accountName:account.name,ok:false,error:e instanceof Error?e.message:String(e)});}
+  }
+  return {ok:true,ordersSynced,executionsSynced,details};
+});
 
 const journalImageKinds=['before','entry','management','exit','other'] as const;
 const journalImageExt=(buffer:Buffer,mime:string)=>{
@@ -99,7 +119,25 @@ app.post('/api/trade/position/close',async(req,reply)=>{if(!requireLive(reply))r
 
 app.post('/api/trade/position/flatten',async(req,reply)=>{if(!requireLive(reply))return;const b=z.object({accountId:z.number().int().min(1).max(5),symbol:z.string(),positionIdx:z.number().int().default(0)}).parse(req.body);const symbol=b.symbol.toUpperCase();const client=getPrivateClient(b.accountId);const cancel=await client.cancelAllOrders({category:'linear',symbol});if(!bybitOk(reply,cancel))return;const cleared=await waitOrdersGone(b.accountId,symbol,5000);if(!cleared){appendSystemEvent(db,{severity:'error',eventType:'position.flatten.aborted',accountId:b.accountId,symbol,message:'Flatten aborted: open orders did not clear within timeout'});return reply.code(409).send({error:'Flatten aborted because active orders are still present after Cancel All'});}const positions=await getPositions(b.accountId);const p=positions.find(x=>x.symbol===symbol&&x.positionIdx===b.positionIdx);let close:any=null;if(p){const qty=await normalizeQty(symbol,p.size);close=await client.submitOrder({category:'linear',symbol,side:p.side==='Buy'?'Sell':'Buy',orderType:'Market',qty,positionIdx:asPositionIdx(p.positionIdx),reduceOnly:true});if(!bybitOk(reply,close))return;}appendSystemEvent(db,{severity:'warning',eventType:'position.flatten.requested',accountId:b.accountId,symbol,message:'Flatten requested after active orders cleared',payload:{cancelRetCode:cancel.retCode,closeRetCode:close?.retCode}});return {cancel,close};});
 
-app.post('/api/trade/order',async(req,reply)=>{if(!requireLive(reply))return;const b=z.object({accountId:z.number().int().min(1).max(5),symbol:z.string(),side:z.enum(['Buy','Sell']),orderType:z.enum(['Market','Limit']),qty:z.number().positive(),price:z.number().positive().optional(),triggerPrice:z.number().positive().optional(),stopLoss:z.number().positive().optional(),takeProfit:z.number().positive().optional(),positionIdx:z.number().int().default(0)}).parse(req.body);const symbol=b.symbol.toUpperCase();const qty=await normalizeQty(symbol,b.qty);if(Number(qty)<=0)return reply.code(400).send({error:'Position quantity is below instrument qtyStep'});const params:any={category:'linear',symbol,side:b.side,orderType:b.orderType,qty,positionIdx:b.positionIdx,timeInForce:'GTC',orderLinkId:`tradev2-${Date.now()}`};if(b.orderType==='Limit'){if(!b.price)return reply.code(400).send({error:'Limit price is required'});params.price=await normalizePrice(symbol,b.price);}if(b.triggerPrice){params.triggerPrice=await normalizePrice(symbol,b.triggerPrice);params.triggerDirection=b.side==='Buy'?1:2;}if(b.stopLoss)params.stopLoss=await normalizePrice(symbol,b.stopLoss);if(b.takeProfit)params.takeProfit=await normalizePrice(symbol,b.takeProfit);const r=await getPrivateClient(b.accountId).submitOrder(params);appendSystemEvent(db,{eventType:'order.submit.requested',accountId:b.accountId,symbol,message:'Order submit requested',payload:{retCode:r.retCode,retMsg:r.retMsg,orderLinkId:params.orderLinkId}});if(!bybitOk(reply,r))return;return r;});
+app.post('/api/trade/order',async(req,reply)=>{
+  if(!requireLive(reply))return;
+  const b=z.object({
+    accountId:z.number().int().min(1).max(5),symbol:z.string(),side:z.enum(['Buy','Sell']),orderType:z.enum(['Market','Limit']),qty:z.number().positive(),
+    price:z.number().positive().optional(),triggerPrice:z.number().positive().optional(),stopLoss:z.number().positive().optional(),takeProfit:z.number().positive().optional(),positionIdx:z.number().int().default(0),
+    pointType:z.number().int().optional(),priceLevel:z.number().positive().optional(),plannedRr:z.number().optional(),riskPercent:z.number().min(0).optional(),riskAmount:z.number().min(0).optional(),plannedEntry:z.number().positive().optional()
+  }).parse(req.body);
+  const symbol=b.symbol.toUpperCase();const qty=await normalizeQty(symbol,b.qty);if(Number(qty)<=0)return reply.code(400).send({error:'Position quantity is below instrument qtyStep'});
+  const params:any={category:'linear',symbol,side:b.side,orderType:b.orderType,qty,positionIdx:b.positionIdx,timeInForce:'GTC',orderLinkId:`tradev2-${Date.now()}`};
+  if(b.orderType==='Limit'){if(!b.price)return reply.code(400).send({error:'Limit price is required'});params.price=await normalizePrice(symbol,b.price);}
+  if(b.triggerPrice){params.triggerPrice=await normalizePrice(symbol,b.triggerPrice);params.triggerDirection=b.side==='Buy'?1:2;}
+  if(b.stopLoss)params.stopLoss=await normalizePrice(symbol,b.stopLoss);if(b.takeProfit)params.takeProfit=await normalizePrice(symbol,b.takeProfit);
+  const r=await getPrivateClient(b.accountId).submitOrder(params);
+  appendSystemEvent(db,{eventType:'order.submit.requested',accountId:b.accountId,symbol,message:'Order submit requested',payload:{retCode:r.retCode,retMsg:r.retMsg,orderLinkId:params.orderLinkId}});
+  if(!bybitOk(reply,r))return;
+  const account=accounts.find(a=>a.id===b.accountId)!;
+  upsertJournalSubmittedOrder(db,{accountId:b.accountId,accountName:account.name,symbol,side:b.side,orderType:b.triggerPrice?'Stop Limit':b.orderType,triggerPrice:b.triggerPrice??null,entryPrice:b.plannedEntry??b.price??null,stopLoss:b.stopLoss??null,takeProfit:b.takeProfit??null,quantity:Number(qty),pointType:b.pointType??null,priceLevel:b.priceLevel??null,rr:b.plannedRr??null,riskPercent:b.riskPercent??null,riskAmount:b.riskAmount??null,exchangeOrderId:String((r as any)?.result?.orderId||'')||null,orderLinkId:params.orderLinkId,reduceOnly:false,raw:{request:b,response:{retCode:r.retCode,retMsg:r.retMsg,result:(r as any).result}}});
+  return r;
+});
 
 const __dirname=dirname(fileURLToPath(import.meta.url));
 const webRoot=resolve(__dirname,'../../web/dist');

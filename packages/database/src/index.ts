@@ -101,6 +101,20 @@ CREATE TABLE IF NOT EXISTS journal_images (
 );
 CREATE INDEX IF NOT EXISTS idx_journal_images_order ON journal_images(journal_order_id, created_at);
 
+CREATE TABLE IF NOT EXISTS journal_execution_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  exec_id TEXT NOT NULL UNIQUE,
+  journal_order_id INTEGER NOT NULL,
+  exec_price REAL NOT NULL,
+  exec_qty REAL NOT NULL,
+  exec_fee REAL NOT NULL DEFAULT 0,
+  occurred_at TEXT,
+  raw_json TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(journal_order_id) REFERENCES journal_orders(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_journal_execution_order ON journal_execution_events(journal_order_id, occurred_at);
+
 CREATE TABLE IF NOT EXISTS system_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   severity TEXT NOT NULL DEFAULT 'info',
@@ -133,8 +147,15 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/trade.s
   addColumn('setup', 'TEXT');
   addColumn('tags_json', 'TEXT');
   addColumn('execution_quality', 'TEXT');
+  addColumn('exchange_order_id', 'TEXT');
+  addColumn('order_link_id', 'TEXT');
+  addColumn('reduce_only', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('risk_percent', 'REAL');
+  addColumn('risk_amount', 'REAL');
   addColumn('updated_at', 'TEXT');
   db.exec("UPDATE journal_orders SET updated_at=COALESCE(updated_at,created_at,CURRENT_TIMESTAMP) WHERE updated_at IS NULL");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_exchange_order ON journal_orders(exchange,account_id,exchange_order_id) WHERE exchange_order_id IS NOT NULL AND exchange_order_id<>''");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_order_link ON journal_orders(exchange,account_id,order_link_id) WHERE order_link_id IS NOT NULL AND order_link_id<>''");
   return db;
 }
 
@@ -253,6 +274,110 @@ export function getJournalImage(db:SqliteDb,id:number):JournalImage|null{
 }
 
 export function deleteJournalImage(db:SqliteDb,id:number){return db.prepare('DELETE FROM journal_images WHERE id=?').run(id).changes>0;}
+
+
+export type JournalSubmittedOrderInput = {
+  accountId:number;
+  accountName:string;
+  symbol:string;
+  side:string;
+  orderType:string;
+  triggerPrice?:number|null;
+  entryPrice?:number|null;
+  stopLoss?:number|null;
+  takeProfit?:number|null;
+  quantity?:number|null;
+  pointType?:number|null;
+  priceLevel?:number|null;
+  rr?:number|null;
+  riskPercent?:number|null;
+  riskAmount?:number|null;
+  exchangeOrderId?:string|null;
+  orderLinkId?:string|null;
+  reduceOnly?:boolean;
+  occurredAt?:string;
+  raw?:unknown;
+};
+
+function findJournalByBybitOrder(db:SqliteDb,accountId:number,orderId?:string|null,orderLinkId?:string|null):any|null{
+  if(orderLinkId){
+    const row=db.prepare("SELECT * FROM journal_orders WHERE exchange='bybit' AND account_id=? AND order_link_id=? ORDER BY id DESC LIMIT 1").get(accountId,orderLinkId) as any;
+    if(row)return row;
+  }
+  if(orderId){
+    const row=db.prepare("SELECT * FROM journal_orders WHERE exchange='bybit' AND account_id=? AND exchange_order_id=? ORDER BY id DESC LIMIT 1").get(accountId,orderId) as any;
+    if(row)return row;
+  }
+  return null;
+}
+
+export function upsertJournalSubmittedOrder(db:SqliteDb,input:JournalSubmittedOrderInput){
+  const existing=findJournalByBybitOrder(db,input.accountId,input.exchangeOrderId,input.orderLinkId);
+  const occurredAt=input.occurredAt||new Date().toISOString();
+  if(existing){
+    db.prepare(`UPDATE journal_orders SET
+      legacy_account=?,symbol=?,side=?,order_type=?,trigger_price=?,
+      entry_price=CASE WHEN entry_price IS NULL OR entry_price=0 THEN ? ELSE entry_price END,
+      stop_loss=?,take_profit=?,quantity=CASE WHEN quantity IS NULL OR quantity=0 THEN ? ELSE quantity END,
+      point_type=COALESCE(?,point_type),price_level=COALESCE(?,price_level),rr=COALESCE(?,rr),
+      risk_percent=COALESCE(?,risk_percent),risk_amount=COALESCE(?,risk_amount),
+      exchange_order_id=COALESCE(NULLIF(?,''),exchange_order_id),order_link_id=COALESCE(NULLIF(?,''),order_link_id),
+      reduce_only=?,raw_json=COALESCE(?,raw_json),updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(input.accountName,input.symbol.toUpperCase(),input.side,input.orderType,input.triggerPrice??null,input.entryPrice??null,input.stopLoss??null,input.takeProfit??null,input.quantity??null,input.pointType??null,input.priceLevel??null,input.rr??null,input.riskPercent??null,input.riskAmount??null,input.exchangeOrderId??'',input.orderLinkId??'',input.reduceOnly?1:0,input.raw===undefined?null:JSON.stringify(input.raw),existing.id);
+    return db.prepare('SELECT * FROM journal_orders WHERE id=?').get(existing.id);
+  }
+  const result=db.prepare(`INSERT INTO journal_orders(
+    legacy_account,account_id,occurred_at,symbol,side,order_type,trigger_price,entry_price,stop_loss,take_profit,quantity,
+    point_type,price_level,status,rr,style,raw_json,exchange,exchange_order_id,order_link_id,reduce_only,risk_percent,risk_amount
+  ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,0,?,'bybit',?,?,?,?,?)`)
+    .run(input.accountName,input.accountId,occurredAt,input.symbol.toUpperCase(),input.side,input.orderType,input.triggerPrice??null,input.entryPrice??null,input.stopLoss??null,input.takeProfit??null,input.quantity??null,input.pointType??null,input.priceLevel??null,input.rr??0,input.raw===undefined?null:JSON.stringify(input.raw),input.exchangeOrderId??null,input.orderLinkId??null,input.reduceOnly?1:0,input.riskPercent??null,input.riskAmount??null);
+  return db.prepare('SELECT * FROM journal_orders WHERE id=?').get(Number(result.lastInsertRowid));
+}
+
+const bybitJournalStatus=(status:string)=>status==='Filled'?1:['Cancelled','Rejected','Deactivated','PartiallyFilledCanceled'].includes(status)?2:0;
+
+export function syncJournalBybitOrder(db:SqliteDb,input:{accountId:number;accountName:string;order:any}){
+  const o=input.order||{};
+  const orderId=String(o.orderId||'');
+  const orderLinkId=String(o.orderLinkId||'');
+  let row=findJournalByBybitOrder(db,input.accountId,orderId,orderLinkId);
+  if(!row && orderLinkId.startsWith('tradev2-')){
+    row=upsertJournalSubmittedOrder(db,{accountId:input.accountId,accountName:input.accountName,symbol:String(o.symbol||''),side:String(o.side||''),orderType:String(o.orderType||'Order'),triggerPrice:Number(o.triggerPrice)||null,entryPrice:Number(o.price)||Number(o.avgPrice)||null,stopLoss:Number(o.stopLoss)||null,takeProfit:Number(o.takeProfit)||null,quantity:Number(o.qty)||null,exchangeOrderId:orderId||null,orderLinkId,reduceOnly:Boolean(o.reduceOnly),occurredAt:o.createdTime?new Date(Number(o.createdTime)).toISOString():undefined,raw:o});
+  }
+  if(!row)return null;
+  const avg=Number(o.avgPrice)||0;
+  const qty=Number(o.cumExecQty)||Number(o.qty)||0;
+  db.prepare(`UPDATE journal_orders SET
+    status=?,entry_price=CASE WHEN ?>0 THEN ? ELSE entry_price END,
+    quantity=CASE WHEN ?>0 THEN ? ELSE quantity END,
+    trigger_price=CASE WHEN ?>0 THEN ? ELSE trigger_price END,
+    stop_loss=CASE WHEN ?>0 THEN ? ELSE stop_loss END,
+    take_profit=CASE WHEN ?>0 THEN ? ELSE take_profit END,
+    exchange_order_id=COALESCE(NULLIF(?,''),exchange_order_id),order_link_id=COALESCE(NULLIF(?,''),order_link_id),
+    reduce_only=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(bybitJournalStatus(String(o.orderStatus||'')),avg,avg,qty,qty,Number(o.triggerPrice)||0,Number(o.triggerPrice)||0,Number(o.stopLoss)||0,Number(o.stopLoss)||0,Number(o.takeProfit)||0,Number(o.takeProfit)||0,orderId,orderLinkId,Boolean(o.reduceOnly)?1:0,row.id);
+  return db.prepare('SELECT * FROM journal_orders WHERE id=?').get(row.id);
+}
+
+export function recordJournalBybitExecution(db:SqliteDb,input:{accountId:number;accountName:string;execution:any}){
+  const x=input.execution||{};
+  const execId=String(x.execId||'');
+  if(!execId)return null;
+  const orderId=String(x.orderId||'');
+  const orderLinkId=String(x.orderLinkId||'');
+  let row=findJournalByBybitOrder(db,input.accountId,orderId,orderLinkId);
+  if(!row && orderLinkId.startsWith('tradev2-')){
+    row=upsertJournalSubmittedOrder(db,{accountId:input.accountId,accountName:input.accountName,symbol:String(x.symbol||''),side:String(x.side||''),orderType:'Execution',entryPrice:Number(x.execPrice)||null,quantity:Number(x.execQty)||null,exchangeOrderId:orderId||null,orderLinkId,occurredAt:x.execTime?new Date(Number(x.execTime)).toISOString():undefined,raw:x});
+  }
+  if(!row)return null;
+  const inserted=db.prepare(`INSERT OR IGNORE INTO journal_execution_events(exec_id,journal_order_id,exec_price,exec_qty,exec_fee,occurred_at,raw_json) VALUES(?,?,?,?,?,?,?)`)
+    .run(execId,row.id,Number(x.execPrice)||0,Number(x.execQty)||0,Math.abs(Number(x.execFee)||0),x.execTime?new Date(Number(x.execTime)).toISOString():null,JSON.stringify(x));
+  if(!inserted.changes)return row;
+  const agg:any=db.prepare(`SELECT SUM(exec_qty) qty,CASE WHEN SUM(exec_qty)>0 THEN SUM(exec_price*exec_qty)/SUM(exec_qty) ELSE 0 END avg_price,SUM(exec_fee) fees FROM journal_execution_events WHERE journal_order_id=?`).get(row.id);
+  db.prepare(`UPDATE journal_orders SET entry_price=CASE WHEN ?>0 THEN ? ELSE entry_price END,quantity=CASE WHEN ?>0 THEN ? ELSE quantity END,fees=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(Number(agg?.avg_price)||0,Number(agg?.avg_price)||0,Number(agg?.qty)||0,Number(agg?.qty)||0,Number(agg?.fees)||0,row.id);
+  return db.prepare('SELECT * FROM journal_orders WHERE id=?').get(row.id);
+}
 
 export function updateJournalOrder(db:SqliteDb,id:number,input:{rr?:number;style?:number;status?:number;note?:string|null;setup?:string|null;tags?:string[];executionQuality?:string|null;exitPrice?:number|null;pnl?:number|null;fees?:number|null}){
   const current:any=db.prepare('SELECT * FROM journal_orders WHERE id=?').get(id);

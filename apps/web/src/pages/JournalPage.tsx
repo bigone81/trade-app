@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClipboardPaste, Image as ImageIcon, Trash2, UploadCloud, X } from 'lucide-react';
+import { ClipboardPaste, Image as ImageIcon, RefreshCw, Trash2, UploadCloud, X } from 'lucide-react';
 import type { AccountPublic } from '@trade/shared';
 import { api, json, money, num } from '../api';
 
@@ -30,11 +30,12 @@ export default function JournalPage(){
   const[selected,setSelected]=useState<JournalRow|null>(null);const[image,setImage]=useState<string|null>(null);const[shotKind,setShotKind]=useState<JournalImage['kind']>('before');const[dropActive,setDropActive]=useState(false);
   const fileInput=useRef<HTMLInputElement|null>(null);
   const config=useQuery<{accounts:AccountPublic[]}>({queryKey:['config'],queryFn:()=>api('/api/config')});
-  const q=useQuery<JournalRow[]>({queryKey:['journal-all'],queryFn:()=>api('/api/journal?limit=1000')});
+  const q=useQuery<JournalRow[]>({queryKey:['journal-all'],queryFn:()=>api('/api/journal?limit=1000'),refetchInterval:5000});
   const images=useQuery<JournalImage[]>({queryKey:['journal-images',selected?.id],queryFn:()=>api(`/api/journal/${selected!.id}/images`),enabled:Boolean(selected)});
   const update=useMutation({mutationFn:({id,patch}:{id:number;patch:any})=>api<JournalRow>(`/api/journal/${id}`,json('PATCH',patch)),onSuccess:(row)=>{setSelected(row);void qc.invalidateQueries({queryKey:['journal-all']});}});
   const uploadImages=useMutation({mutationFn:async({files,kind}:{files:File[];kind:JournalImage['kind']})=>{if(!selected)throw new Error('Select a journal trade first');for(const file of files){if(!['image/png','image/jpeg','image/webp'].includes(file.type))throw new Error('Only PNG, JPEG and WEBP images are allowed');if(file.size>8*1024*1024)throw new Error(`${file.name} is larger than 8 MB`);const dataBase64=await fileToBase64(file);await api(`/api/journal/${selected.id}/images`,json('POST',{kind,name:file.name,mime:file.type,dataBase64}));}},onSuccess:()=>{void qc.invalidateQueries({queryKey:['journal-images',selected?.id]});void qc.invalidateQueries({queryKey:['journal-all']});}});
   const deleteImage=useMutation({mutationFn:(id:number)=>api(`/api/journal/images/${id}`,{method:'DELETE'}),onSuccess:()=>{void qc.invalidateQueries({queryKey:['journal-images',selected?.id]});void qc.invalidateQueries({queryKey:['journal-all']});}});
+  const syncJournal=useMutation({mutationFn:()=>api('/api/journal/sync',{method:'POST'}),onSuccess:()=>void qc.invalidateQueries({queryKey:['journal-all']})});
 
   const accountNames=useMemo(()=>Object.fromEntries((config.data?.accounts||[]).map(a=>[a.id,a.name])),[config.data]);
   const rows=useMemo(()=>{return(q.data||[]).filter(r=>{
@@ -64,7 +65,7 @@ export default function JournalPage(){
   useEffect(()=>{if(!selected)return;const onPaste=(event:ClipboardEvent)=>{const fromItems=Array.from(event.clipboardData?.items||[]).filter(item=>item.kind==='file'&&item.type.startsWith('image/')).map(item=>item.getAsFile()).filter((file):file is File=>Boolean(file));const pasted=fromItems.length?fromItems:Array.from(event.clipboardData?.files||[]).filter(f=>f.type.startsWith('image/'));if(!pasted.length)return;event.preventDefault();acceptFiles(pasted);};window.addEventListener('paste',onPaste);return()=>window.removeEventListener('paste',onPaste);},[selected,shotKind]);
 
   return <div className="page journal-page">
-    <div className="page-head"><div><h1>Journal</h1><p>Trading diary, review and R-based analytics. Legacy notes and screenshots are preserved.</p></div></div>
+    <div className="page-head"><div><h1>Journal</h1><p>Trading diary, review and R-based analytics. Legacy notes and screenshots are preserved.</p></div><button className="btn secondary" disabled={syncJournal.isPending} onClick={()=>syncJournal.mutate()}><RefreshCw size={14}/>{syncJournal.isPending?'Syncing…':'Sync Bybit'}</button></div>
     <div className="journal-tabs"><button className={tab==='trades'?'tab active':'tab'} onClick={()=>setTab('trades')}>Trades</button><button className={tab==='analytics'?'tab active':'tab'} onClick={()=>setTab('analytics')}>Analytics</button></div>
     <div className="card journal-filterbar">
       <select className="select" value={account} onChange={e=>setAccount(Number(e.target.value))}><option value={0}>All accounts</option>{config.data?.accounts.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select>

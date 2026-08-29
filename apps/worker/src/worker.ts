@@ -1,5 +1,5 @@
 import { WebsocketClient } from 'bybit-api';
-import { appendSystemEvent, listAlerts, openDatabase } from '@trade/database';
+import { appendSystemEvent, listAlerts, openDatabase, recordJournalBybitExecution, syncJournalBybitOrder } from '@trade/database';
 
 const db=openDatabase(process.env.DATABASE_PATH || './data/trade.sqlite');
 const telegramToken=process.env.TELEGRAM_BOT_TOKEN || '';
@@ -77,9 +77,16 @@ for(let id=1;id<=5;id++){
     const topic=String(data?.topic||'');
     if(!['order','execution','position','wallet'].includes(topic)) return;
     appendSystemEvent(db,{eventType:`bybit.${topic}.update`,accountId:id,symbol:Array.isArray(data?.data)&&data.data[0]?.symbol?data.data[0].symbol:null,message:`${name}: ${topic} update`,payload:data?.data});
-    if(topic==='execution' && telegramToken && telegramChatId){
-      const rows=Array.isArray(data.data)?data.data:[];
-      for(const x of rows){void telegram(`✅ <b>${name}</b> · ${x.symbol}\n${x.side} ${x.execQty} @ ${x.execPrice}`).catch(()=>{});}
+    const rows=Array.isArray(data.data)?data.data:[];
+    if(topic==='order'){
+      for(const x of rows)syncJournalBybitOrder(db,{accountId:id,accountName:name,order:x});
+    }
+    if(topic==='execution'){
+      for(const x of rows){
+        recordJournalBybitExecution(db,{accountId:id,accountName:name,execution:x});
+        if(telegramToken && telegramChatId)void telegram(`✅ <b>${name}</b> · ${x.symbol}
+${x.side} ${x.execQty} @ ${x.execPrice}`).catch(()=>{});
+      }
     }
   });
   ws.subscribeV5(['order','execution','position','wallet'],'linear');
