@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type LevelLineStyle = 'solid' | 'dashed' | 'dotted';
+export type TradingOverlayLabelMode = 'full' | 'compact' | 'price';
 
 export interface AppPreferences {
   theme: ThemeMode;
@@ -16,11 +17,39 @@ export interface AppPreferences {
     opacity: number;
     showPriceLabel: boolean;
   };
+  riskReward: {
+    defaultRatio: number;
+    defaultWidthBars: number;
+    snapToLevels: boolean;
+    snapPixels: number;
+  };
   chart: {
     futureBars: number;
     showGrid: boolean;
     showCurrentPriceLine: boolean;
     autoFollowLive: boolean;
+  };
+  tradingOverlays: {
+    showOrders: boolean;
+    showPositions: boolean;
+    showStopLoss: boolean;
+    showTakeProfit: boolean;
+    showLiquidation: boolean;
+    showAccountName: boolean;
+    showOrderSize: boolean;
+    showPnl: boolean;
+    labelMode: TradingOverlayLabelMode;
+    lineWidth: 1 | 2 | 3;
+    opacity: number;
+    orderStyle: LevelLineStyle;
+    positionStyle: LevelLineStyle;
+    stopStyle: LevelLineStyle;
+    targetStyle: LevelLineStyle;
+    accountIds: number[];
+    allowDragOrders: boolean;
+    allowDragStops: boolean;
+    allowDragTargets: boolean;
+    confirmChanges: boolean;
   };
 }
 
@@ -40,11 +69,39 @@ export const defaultPreferences: AppPreferences = {
     opacity: 0.9,
     showPriceLabel: true,
   },
+  riskReward: {
+    defaultRatio: 3,
+    defaultWidthBars: 30,
+    snapToLevels: true,
+    snapPixels: 8,
+  },
   chart: {
     futureBars: 24,
     showGrid: true,
     showCurrentPriceLine: true,
     autoFollowLive: true,
+  },
+  tradingOverlays: {
+    showOrders: true,
+    showPositions: true,
+    showStopLoss: true,
+    showTakeProfit: true,
+    showLiquidation: false,
+    showAccountName: true,
+    showOrderSize: true,
+    showPnl: false,
+    labelMode: 'full',
+    lineWidth: 1,
+    opacity: 0.95,
+    orderStyle: 'solid',
+    positionStyle: 'solid',
+    stopStyle: 'dashed',
+    targetStyle: 'dashed',
+    accountIds: [],
+    allowDragOrders: true,
+    allowDragStops: true,
+    allowDragTargets: true,
+    confirmChanges: true,
   },
 };
 
@@ -54,7 +111,9 @@ function mergePreferences(raw: Partial<AppPreferences> | null): AppPreferences {
     ...(raw || {}),
     accountRiskPercent: { ...defaultPreferences.accountRiskPercent, ...(raw?.accountRiskPercent || {}) },
     manualLevel: { ...defaultPreferences.manualLevel, ...(raw?.manualLevel || {}) },
+    riskReward: { ...defaultPreferences.riskReward, ...(raw?.riskReward || {}) },
     chart: { ...defaultPreferences.chart, ...(raw?.chart || {}) },
+    tradingOverlays: { ...defaultPreferences.tradingOverlays, ...(raw?.tradingOverlays || {}) },
   };
 }
 

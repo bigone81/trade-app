@@ -28,6 +28,12 @@ function candleStep(candles: Candle[]) {
   return diffs[Math.floor(diffs.length / 2)] || 60;
 }
 
+const directionFromGeometry = (entry: number, stop: number) => stop < entry ? 'long' as const : 'short' as const;
+const targetAtRatio = (entry: number, stop: number, ratio: number) => {
+  const risk = Math.abs(entry - stop);
+  return stop < entry ? entry + risk * ratio : entry - risk * ratio;
+};
+
 export default function RiskRewardOverlay({
   chart,
   series,
@@ -45,8 +51,6 @@ export default function RiskRewardOverlay({
   const [drag, setDrag] = useState<{
     kind: DragKind;
     item: RiskReward;
-    startClientX: number;
-    startClientY: number;
     startPrice: number | null;
     startTime: number | null;
   } | null>(null);
@@ -115,6 +119,7 @@ export default function RiskRewardOverlay({
   useEffect(() => {
     if (!drag || !series || !chart || !host) return;
     draftRef.current = { ...(draft || drag.item) };
+    chart.applyOptions({ handleScroll: false, handleScale: false });
 
     const move = (event: PointerEvent) => {
       const rect = host.getBoundingClientRect();
@@ -128,11 +133,8 @@ export default function RiskRewardOverlay({
       } else if (drag.kind === 'startTime' || drag.kind === 'endTime') {
         const t = xToTime(x);
         if (typeof t === 'number') {
-          if (drag.kind === 'startTime') {
-            next.startTime = Math.min(t, next.endTime - Math.max(1, step));
-          } else {
-            next.endTime = Math.max(t, next.startTime + Math.max(1, step));
-          }
+          if (drag.kind === 'startTime') next.startTime = Math.min(t, next.endTime - Math.max(1, step));
+          else next.endTime = Math.max(t, next.startTime + Math.max(1, step));
         }
       } else {
         const currentPrice = series.coordinateToPrice(y);
@@ -151,12 +153,12 @@ export default function RiskRewardOverlay({
         }
       }
 
-      next.direction = next.target >= next.entry ? 'long' : 'short';
+      next.direction = directionFromGeometry(next.entry, next.stop);
       draftRef.current = next;
       setDraft(next);
     };
 
-    const up = () => {
+    const finish = () => {
       const current = draftRef.current;
       if (current) {
         onUpdate(current.id, {
@@ -165,19 +167,23 @@ export default function RiskRewardOverlay({
           target: current.target,
           startTime: current.startTime,
           endTime: current.endTime,
-          direction: current.target >= current.entry ? 'long' : 'short',
+          direction: directionFromGeometry(current.entry, current.stop),
         });
       }
+      chart.applyOptions({ handleScroll: true, handleScale: true });
       setDrag(null);
       setDraft(null);
       draftRef.current = null;
     };
 
     window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up, { once: true });
+    window.addEventListener('pointerup', finish, { once: true });
+    window.addEventListener('pointercancel', finish, { once: true });
     return () => {
       window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      chart.applyOptions({ handleScroll: true, handleScale: true });
     };
   }, [drag, series, chart, host, onUpdate, step]);
 
@@ -198,10 +204,18 @@ export default function RiskRewardOverlay({
     setDrag({
       kind,
       item,
-      startClientX: event.clientX,
-      startClientY: event.clientY,
       startPrice: series.coordinateToPrice(y),
       startTime: xToTime(x),
+    });
+  };
+
+  const setRatio = (item: RiskReward, ratio: number, event: ReactPointerEvent) => {
+    event.stopPropagation();
+    event.preventDefault();
+    onSelect(item);
+    onUpdate(item.id, {
+      target: targetAtRatio(item.entry, item.stop, ratio),
+      direction: directionFromGeometry(item.entry, item.stop),
     });
   };
 
@@ -226,29 +240,11 @@ export default function RiskRewardOverlay({
         const selected = selectedId === r.id;
 
         return (
-          <g className={selected ? 'rr-object selected' : 'rr-object'} key={r.id}>
-            <rect
-              className="rr-reward"
-              x={left}
-              y={rewardTop}
-              width={width}
-              height={Math.max(1, Math.abs(targetY - entryY))}
-              rx="2"
-              onPointerDown={(event) => beginDrag('move', r, event)}
-            />
-            <rect
-              className="rr-risk"
-              x={left}
-              y={riskTop}
-              width={width}
-              height={Math.max(1, Math.abs(stopY - entryY))}
-              rx="2"
-              onPointerDown={(event) => beginDrag('move', r, event)}
-            />
+          <g className={selected ? 'rr-object selected' : 'rr-object'} key={r.id} onPointerDown={() => onSelect(r)}>
+            <rect className="rr-reward" x={left} y={rewardTop} width={width} height={Math.max(1, Math.abs(targetY - entryY))} rx="2" onPointerDown={(event) => beginDrag('move', r, event)} />
+            <rect className="rr-risk" x={left} y={riskTop} width={width} height={Math.max(1, Math.abs(stopY - entryY))} rx="2" onPointerDown={(event) => beginDrag('move', r, event)} />
             <line className="rr-entry" x1={left} x2={left + width} y1={entryY} y2={entryY} />
-            <text x={left + 8} y={objectTop + 15}>
-              R:R {rr.ratio.toFixed(2)} · {r.direction.toUpperCase()}
-            </text>
+            <text x={left + 8} y={objectTop + 15}>R:R {rr.ratio.toFixed(2)} · {directionFromGeometry(r.entry, r.stop).toUpperCase()}</text>
 
             <g className="rr-delete" onPointerDown={(event) => { event.stopPropagation(); onDelete(r.id); }}>
               <circle cx={left + width - 9} cy={objectTop + 10} r="8" />
@@ -267,6 +263,11 @@ export default function RiskRewardOverlay({
                 <circle className="rr-handle time" cx={left} cy={(objectTop + objectBottom) / 2} r="5" onPointerDown={(event) => beginDrag('startTime', r, event)} />
                 <circle className="rr-handle time" cx={left + width} cy={(objectTop + objectBottom) / 2} r="5" onPointerDown={(event) => beginDrag('endTime', r, event)} />
                 <circle className="rr-move-handle" cx={left + width / 2} cy={(objectTop + objectBottom) / 2} r="6" onPointerDown={(event) => beginDrag('move', r, event)} />
+                {[1, 2, 3, 4].map((ratio, index) => {
+                  const bx = left + 7 + index * 31;
+                  const by = Math.max(24, objectTop - 20);
+                  return <g className="rr-ratio-button" key={ratio} onPointerDown={(event) => setRatio(r, ratio, event)}><rect x={bx} y={by} width="27" height="16" rx="4" /><text x={bx + 13.5} y={by + 11.5} textAnchor="middle">{ratio}R</text></g>;
+                })}
               </>
             )}
           </g>

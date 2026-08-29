@@ -144,6 +144,8 @@ export interface TradeOrder {
   leavesQty: number;
   cumExecQty: number;
   triggerPrice: number | null;
+  triggerDirection?: number | null;
+  stopOrderType?: string | null;
   stopLoss: number | null;
   takeProfit: number | null;
   reduceOnly: boolean;
@@ -162,4 +164,21 @@ export interface TradeExecution {
   execQty: number;
   execFee: number;
   execTime: number;
+}
+
+export interface TradingOverlayLine {
+  id: string;
+  kind: 'order' | 'position' | 'sl' | 'tp' | 'liq';
+  price: number;
+  accountId: number;
+  accountName: string;
+  symbol: string;
+  side?: Side;
+  qty?: number;
+  pnl?: number;
+  orderId?: string;
+  orderType?: string;
+  orderStatus?: string;
+  positionIdx?: number;
+  editTarget?: 'order_price' | 'order_trigger' | 'order_sl' | 'order_tp' | 'position_sl' | 'position_tp';
 }

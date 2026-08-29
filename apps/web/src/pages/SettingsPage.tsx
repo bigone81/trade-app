@@ -111,6 +111,17 @@ export default function SettingsPage() {
         </section>
 
         <section className="card settings-card">
+          <h3>Risk / Reward</h3>
+          <div className="field-grid">
+            <div className="field"><label>Default target · R</label><input className="input" type="number" min="0.5" max="20" step="0.25" value={preferences.riskReward.defaultRatio} onChange={(e)=>save({...preferences,riskReward:{...preferences.riskReward,defaultRatio:Math.max(0.5,Number(e.target.value)||0.5)}})}/></div>
+            <div className="field"><label>Default width · bars</label><input className="input" type="number" min="5" max="200" step="1" value={preferences.riskReward.defaultWidthBars} onChange={(e)=>save({...preferences,riskReward:{...preferences.riskReward,defaultWidthBars:Math.max(5,Math.min(200,Number(e.target.value)||30))}})}/></div>
+          </div>
+          <label className="setting-check"><input type="checkbox" checked={preferences.riskReward.snapToLevels} onChange={(e)=>save({...preferences,riskReward:{...preferences.riskReward,snapToLevels:e.target.checked}})}/> Snap Entry / Stop to nearby chart levels</label>
+          <div className="field"><label>Snap distance · {preferences.riskReward.snapPixels}px</label><input className="range" type="range" min="3" max="18" step="1" value={preferences.riskReward.snapPixels} onChange={(e)=>save({...preferences,riskReward:{...preferences.riskReward,snapPixels:Number(e.target.value)}})}/></div>
+          <p className="muted settings-hint">R/R is created with two clicks: Entry → Stop. Direction is detected automatically and Target is created at the default R multiple.</p>
+        </section>
+
+        <section className="card settings-card">
           <h3>Trading defaults</h3>
           <div className="field-grid">
             <div className="field">
@@ -157,6 +168,37 @@ export default function SettingsPage() {
           <label className="setting-check"><input type="checkbox" checked={preferences.chart.autoFollowLive} onChange={(e) => save({ ...preferences, chart: { ...preferences.chart, autoFollowLive: e.target.checked } })} /> Follow live when already at the right edge</label>
           <button className="btn secondary" onClick={() => { clearChartViews(); alert('Saved chart positions were cleared.'); }}>Reset saved chart positions</button>
           <p className="muted settings-hint">Each symbol + timeframe remembers its own horizontal zoom and position in this browser.</p>
+        </section>
+
+        <section className="card settings-card trading-overlay-settings">
+          <h3>Chart · Trading overlays</h3>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showOrders} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showOrders:e.target.checked}})}/> Show active orders</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showPositions} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showPositions:e.target.checked}})}/> Show open positions</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showStopLoss} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showStopLoss:e.target.checked}})}/> Show Stop Loss</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showTakeProfit} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showTakeProfit:e.target.checked}})}/> Show Take Profit</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showLiquidation} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showLiquidation:e.target.checked}})}/> Show liquidation price</label>
+
+          <div className="settings-subtitle">Labels</div>
+          <div className="field"><label>Label detail</label><select className="select" value={preferences.tradingOverlays.labelMode} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,labelMode:e.target.value as any}})}><option value="full">Full</option><option value="compact">Compact</option><option value="price">Price only</option></select></div>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showAccountName} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showAccountName:e.target.checked}})}/> Show account name</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showOrderSize} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showOrderSize:e.target.checked}})}/> Show order / position size</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showPnl} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showPnl:e.target.checked}})}/> Show unrealized PnL on position label</label>
+
+          <div className="settings-subtitle">Lines</div>
+          <div className="field-grid"><div className="field"><label>Width</label><select className="select" value={preferences.tradingOverlays.lineWidth} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,lineWidth:Number(e.target.value) as 1|2|3}})}><option value={1}>1 px</option><option value={2}>2 px</option><option value={3}>3 px</option></select></div><div className="field"><label>Opacity · {Math.round(preferences.tradingOverlays.opacity*100)}%</label><input className="range" type="range" min="0.3" max="1" step="0.05" value={preferences.tradingOverlays.opacity} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,opacity:Number(e.target.value)}})}/></div></div>
+          <div className="field-grid"><div className="field"><label>Order</label><select className="select" value={preferences.tradingOverlays.orderStyle} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,orderStyle:e.target.value as any}})}><option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option></select></div><div className="field"><label>Position</label><select className="select" value={preferences.tradingOverlays.positionStyle} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,positionStyle:e.target.value as any}})}><option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option></select></div></div>
+          <div className="field-grid"><div className="field"><label>Stop Loss</label><select className="select" value={preferences.tradingOverlays.stopStyle} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,stopStyle:e.target.value as any}})}><option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option></select></div><div className="field"><label>Take Profit</label><select className="select" value={preferences.tradingOverlays.targetStyle} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,targetStyle:e.target.value as any}})}><option value="solid">Solid</option><option value="dashed">Dashed</option><option value="dotted">Dotted</option></select></div></div>
+
+          <div className="settings-subtitle">Interaction</div>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.allowDragOrders} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,allowDragOrders:e.target.checked}})}/> Allow dragging pending order price</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.allowDragStops} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,allowDragStops:e.target.checked}})}/> Allow dragging Stop Loss</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.allowDragTargets} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,allowDragTargets:e.target.checked}})}/> Allow dragging Take Profit</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.confirmChanges} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,confirmChanges:e.target.checked}})}/> Confirm chart trading changes before sending to exchange</label>
+
+          <div className="settings-subtitle">Accounts shown on chart</div>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.accountIds.length===0} onChange={(e)=>{if(e.target.checked)save({...preferences,tradingOverlays:{...preferences.tradingOverlays,accountIds:[]}})}}/> All accounts</label>
+          {accounts.map((a)=>{const all=preferences.tradingOverlays.accountIds.length===0;const checked=all||preferences.tradingOverlays.accountIds.includes(a.id);return <label className="setting-check nested" key={`overlay-account-${a.id}`}><input type="checkbox" checked={checked} onChange={(e)=>{let ids=all?accounts.map(x=>x.id):[...preferences.tradingOverlays.accountIds];ids=e.target.checked?[...new Set([...ids,a.id])]:ids.filter(id=>id!==a.id);if(ids.length===accounts.length)ids=[];save({...preferences,tradingOverlays:{...preferences.tradingOverlays,accountIds:ids}})}}/> {a.name}{a.demo?' · demo':''}</label>})}
+          <p className="muted settings-hint">Order/SL/TP lines come from the exchange and are separate from Manual Levels. Position Entry is read-only.</p>
         </section>
 
         <section className="card settings-card">

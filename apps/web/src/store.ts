@@ -73,10 +73,7 @@ export const useUi = create<UiState>((set) => ({
   setTool: (tool) => set({ tool }),
 
   selectRiskReward: (selectedRiskReward) =>
-    set({
-      selectedRiskReward,
-      drawerOpen: Boolean(selectedRiskReward),
-    }),
+    set({ selectedRiskReward }),
 
   setDrawerOpen: (drawerOpen) => set({ drawerOpen }),
 

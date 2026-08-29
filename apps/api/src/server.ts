@@ -173,12 +173,48 @@ app.post('/api/trade/orders/cancel',async(req,reply)=>{
   appendSystemEvent(db,{eventType:'order.cancel.requested',accountId:b.accountId,symbol:b.symbol,message:`Cancel requested for ${b.orderId}`,payload:{retCode:r.retCode,retMsg:r.retMsg}});
   if(!exchangeOk(reply,r))return;return r;
 });
+app.post('/api/trade/orders/cancel-group',async(req,reply)=>{
+  if(!requireLive(reply))return;
+  const b=z.object({accountId:z.number().int().positive(),symbol:z.string(),orderIds:z.array(z.string().min(1)).min(1).max(10)}).parse(req.body);
+  const adapter=adapterFor(b.accountId);const symbol=b.symbol.toUpperCase();
+  const orderIds=[...new Set(b.orderIds)];
+  const results:any[]=[];
+  for(const orderId of orderIds){
+    try{
+      const r=await adapter.cancelOrder(b.accountId,{symbol,orderId});
+      const benign=Number(r?.retCode)===0||/not exist|too late|already/i.test(String(r?.retMsg||''));
+      results.push({orderId,retCode:r?.retCode,retMsg:r?.retMsg,ok:benign});
+    }catch(error:any){results.push({orderId,retCode:-1,retMsg:error?.message||'Cancel failed',ok:false});}
+  }
+  appendSystemEvent(db,{eventType:'orders.cancel_group.requested',accountId:b.accountId,symbol,message:`Cancel group requested (${orderIds.length} orders)`,payload:{orderIds,results}});
+  const failed=results.filter((row)=>!row.ok);
+  if(failed.length){reply.code(400).send({error:'One or more linked orders could not be cancelled',results});return;}
+  return {retCode:0,retMsg:'OK',result:{results}};
+});
+
 app.post('/api/trade/orders/cancel-all',async(req,reply)=>{
   if(!requireLive(reply))return;
   const b=z.object({accountId:z.number().int().positive(),symbol:z.string()}).parse(req.body);
   const adapter=adapterFor(b.accountId);
   const r=await adapter.cancelAllOrders(b.accountId,{symbol:b.symbol.toUpperCase()});
   appendSystemEvent(db,{eventType:'orders.cancel_all.requested',accountId:b.accountId,symbol:b.symbol,message:'Cancel all requested',payload:{retCode:r.retCode,retMsg:r.retMsg}});
+  if(!exchangeOk(reply,r))return;return r;
+});
+
+app.post('/api/trade/orders/amend',async(req,reply)=>{
+  if(!requireLive(reply))return;
+  const b=z.object({
+    accountId:z.number().int().positive(),symbol:z.string(),orderId:z.string().min(1),
+    price:z.number().positive().optional(),triggerPrice:z.number().positive().optional(),stopLoss:z.number().positive().optional(),takeProfit:z.number().positive().optional(),
+  }).refine((v:any)=>v.price!==undefined||v.triggerPrice!==undefined||v.stopLoss!==undefined||v.takeProfit!==undefined,{message:'At least one amend field is required'}).parse(req.body);
+  const adapter=adapterFor(b.accountId);const symbol=b.symbol.toUpperCase();
+  const input:any={symbol,orderId:b.orderId};
+  if(b.price!==undefined)input.price=await adapter.normalizePrice(symbol,b.price);
+  if(b.triggerPrice!==undefined)input.triggerPrice=await adapter.normalizePrice(symbol,b.triggerPrice);
+  if(b.stopLoss!==undefined)input.stopLoss=await adapter.normalizePrice(symbol,b.stopLoss);
+  if(b.takeProfit!==undefined)input.takeProfit=await adapter.normalizePrice(symbol,b.takeProfit);
+  const r=await adapter.amendOrder(b.accountId,input);
+  appendSystemEvent(db,{eventType:'order.amend.requested',accountId:b.accountId,symbol,message:`Order ${b.orderId} amend requested`,payload:{price:input.price,triggerPrice:input.triggerPrice,stopLoss:input.stopLoss,takeProfit:input.takeProfit,retCode:r.retCode,retMsg:r.retMsg}});
   if(!exchangeOk(reply,r))return;return r;
 });
 

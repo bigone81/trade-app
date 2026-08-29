@@ -78,6 +78,7 @@ export default function CalculatorDrawer({
   };
 
   useEffect(() => {
+    if (!open) return;
     if (selected) {
       initializedSymbolRef.current = symbol;
       setEntry(selected.entry);
@@ -105,7 +106,7 @@ export default function CalculatorDrawer({
       setTrigger(currentPrice);
       setTechnicalStop(currentPrice * 0.99);
     }
-  }, [selected?.id, preferredPriceLevel, preferredPriceLevelSeq, currentPrice, symbol]);
+  }, [open, selected?.id, selected?.entry, selected?.stop, selected?.target, preferredPriceLevel, preferredPriceLevelSeq, currentPrice, symbol]);
 
   const summary = useQuery<any[]>({
     queryKey: ['summary', accountId],
@@ -216,10 +217,10 @@ export default function CalculatorDrawer({
     if (kind === 'target') setTarget(value);
     if (selected) {
       const nextEntry = kind === 'entry' ? value : entry;
-      const nextTarget = kind === 'target' ? value : target;
+      const nextStop = kind === 'stop' ? value : stop;
       onUpdateRiskReward(selected.id, {
         [kind]: value,
-        direction: nextTarget >= nextEntry ? 'long' : 'short',
+        direction: nextStop < nextEntry ? 'long' : 'short',
       } as Partial<RiskReward>);
     }
   };

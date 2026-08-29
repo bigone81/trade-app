@@ -71,7 +71,7 @@ export class BybitAdapter {
   async getOrders(accountId:AccountId,history=false):Promise<TradeOrder[]>{
     const a=this.getAccount(accountId),c=this.getPrivateClient(accountId);const res=history?await c.getHistoricOrders({category:'linear',settleCoin:'USDT',limit:50} as any):await c.getActiveOrders({category:'linear',settleCoin:'USDT',limit:50} as any);
     if(res.retCode!==0)throw new Error(res.retMsg||'Order query error');
-    return (res.result.list as any[]).map(x=>({accountId:a.id,accountName:a.name,orderId:x.orderId,orderLinkId:x.orderLinkId||'',symbol:x.symbol,side:x.side,orderType:x.orderType,orderStatus:x.orderStatus,price:num(x.price),qty:num(x.qty),leavesQty:num(x.leavesQty),cumExecQty:num(x.cumExecQty),triggerPrice:nullable(x.triggerPrice),stopLoss:nullable(x.stopLoss),takeProfit:nullable(x.takeProfit),reduceOnly:Boolean(x.reduceOnly),createdTime:num(x.createdTime),updatedTime:num(x.updatedTime)}));
+    return (res.result.list as any[]).map(x=>({accountId:a.id,accountName:a.name,orderId:x.orderId,orderLinkId:x.orderLinkId||'',symbol:x.symbol,side:x.side,orderType:x.orderType,orderStatus:x.orderStatus,price:num(x.price),qty:num(x.qty),leavesQty:num(x.leavesQty),cumExecQty:num(x.cumExecQty),triggerPrice:nullable(x.triggerPrice),triggerDirection:nullable(x.triggerDirection),stopOrderType:x.stopOrderType?String(x.stopOrderType):null,stopLoss:nullable(x.stopLoss),takeProfit:nullable(x.takeProfit),reduceOnly:Boolean(x.reduceOnly),createdTime:num(x.createdTime),updatedTime:num(x.updatedTime)}));
   }
   async getExecutions(accountId:AccountId):Promise<TradeExecution[]>{
     const a=this.getAccount(accountId),c=this.getPrivateClient(accountId);const res=await c.getExecutionList({category:'linear',limit:50} as any);
@@ -79,6 +79,7 @@ export class BybitAdapter {
     return (res.result.list as any[]).map(x=>({accountId:a.id,accountName:a.name,execId:x.execId,orderId:x.orderId,symbol:x.symbol,side:x.side,execPrice:num(x.execPrice),execQty:num(x.execQty),execFee:num(x.execFee),execTime:num(x.execTime)}));
   }
   cancelOrder(accountId:AccountId,input:any){return this.getPrivateClient(accountId).cancelOrder({category:'linear',...input});}
+  amendOrder(accountId:AccountId,input:any){return this.getPrivateClient(accountId).amendOrder({category:'linear',...input} as any);}
   cancelAllOrders(accountId:AccountId,input:any){return this.getPrivateClient(accountId).cancelAllOrders({category:'linear',...input});}
   setTradingStop(accountId:AccountId,input:any){return this.getPrivateClient(accountId).setTradingStop({category:'linear',...input} as any);}
   submitOrder(accountId:AccountId,input:any){return this.getPrivateClient(accountId).submitOrder({category:'linear',...input});}

@@ -57,3 +57,7 @@ html[data-theme="light"] .journal-dropzone{background:#f8fafc;border-color:#c9d2
 html[data-theme="light"] .notification-bell{background:#fffffff2;box-shadow:0 8px 24px #64748b22}html[data-theme="light"] .notification-row.unread{background:#eef5fc}html[data-theme="light"] .notification-icon{background:#edf2f7}
 @media(max-width:700px){.page-head{padding-right:44px}.notification-center{right:10px;top:9px}.notification-popover{position:fixed;right:8px;left:8px;top:52px;width:auto;max-height:calc(100vh - 125px)}}
 .notification-test-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:13px}
+
+/* v9 chart interaction + exchange overlays */
+.rr-draft-line.target{border-color:#31c48d}.rr-ratio-button{pointer-events:all;cursor:pointer}.rr-ratio-button rect{fill:#111923e8;stroke:#526074;stroke-width:1}.rr-ratio-button text{fill:#dce5ef;font-size:9px;font-weight:800;pointer-events:none}.rr-ratio-button:hover rect{fill:#1c2b3e;stroke:#8296b2}.trading-line-hit{pointer-events:none}.trading-line-hit.draggable{pointer-events:all;cursor:ns-resize}.order-child-badge{margin-left:7px;font-size:8px;padding:2px 5px;vertical-align:middle}.trading-overlay-settings .settings-subtitle{margin-top:14px}.trading-overlay-settings .setting-check{margin-top:7px}
+html[data-theme="light"] .rr-ratio-button rect{fill:#fff;stroke:#7a8797}html[data-theme="light"] .rr-ratio-button text{fill:#273445}

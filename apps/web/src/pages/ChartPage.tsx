@@ -14,11 +14,17 @@ import type {
   Candle,
   ManualLevel,
   RiskReward,
+  TradeOrder,
+  TradePosition,
+  TradingOverlayLine,
 } from '@trade/shared';
 import { api, json, num } from '../api';
 import { useUi } from '../store';
 import TradingChart from '../components/TradingChart';
 import CalculatorDrawer from '../components/CalculatorDrawer';
+import ConfirmDialog from '../components/ConfirmDialog';
+import { buildTradingOverlayLines } from '../tradeGrouping';
+import { usePreferences } from '../preferences';
 
 interface MarketTicker {
   symbol: string;
@@ -37,8 +43,10 @@ const formatTurnover = (value: number) => {
 export default function ChartPage() {
   const qc = useQueryClient();
   const ui = useUi();
+  const { preferences } = usePreferences();
   const [tickerSearch, setTickerSearch] = useState('');
   const [livePrice, setLivePrice] = useState<number | null>(null);
+  const [pendingTradingChange, setPendingTradingChange] = useState<{ line: TradingOverlayLine; price: number } | null>(null);
 
   const config = useQuery<{
     accounts: AccountPublic[];
@@ -90,6 +98,23 @@ export default function ChartPage() {
     queryKey: ['alerts', ui.symbol],
     queryFn: () => api(`/api/alerts?symbol=${ui.symbol}`),
   });
+
+  const tradeOrders = useQuery<TradeOrder[]>({
+    queryKey: ['chart-trade-orders'],
+    queryFn: () => api('/api/trade/orders'),
+    refetchInterval: 5_000,
+  });
+
+  const tradePositions = useQuery<TradePosition[]>({
+    queryKey: ['chart-trade-positions'],
+    queryFn: () => api('/api/trade/positions'),
+    refetchInterval: 5_000,
+  });
+
+  const tradingLines = useMemo(
+    () => buildTradingOverlayLines(ui.symbol, tradeOrders.data || [], tradePositions.data || []),
+    [ui.symbol, tradeOrders.data, tradePositions.data],
+  );
 
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['manual-levels', ui.symbol] });
@@ -187,6 +212,45 @@ export default function ChartPage() {
     onSuccess: invalidate,
   });
 
+  const updateTradingLine = useMutation({
+    mutationFn: async ({ line, price }: { line: TradingOverlayLine; price: number }) => {
+      if (!line.editTarget) return;
+      if (line.editTarget === 'position_sl' || line.editTarget === 'position_tp') {
+        return api('/api/trade/position/stops', json('POST', {
+          accountId: line.accountId,
+          symbol: line.symbol,
+          positionIdx: line.positionIdx || 0,
+          ...(line.editTarget === 'position_sl' ? { stopLoss: price } : { takeProfit: price }),
+        }));
+      }
+      const patch = line.editTarget === 'order_price'
+        ? { price }
+        : line.editTarget === 'order_trigger'
+          ? { triggerPrice: price }
+          : line.editTarget === 'order_sl'
+            ? { stopLoss: price }
+            : { takeProfit: price };
+      return api('/api/trade/orders/amend', json('POST', {
+        accountId: line.accountId, symbol: line.symbol, orderId: line.orderId, ...patch,
+      }));
+    },
+    onSuccess: () => {
+      setPendingTradingChange(null);
+      window.setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ['chart-trade-orders'] });
+        void qc.invalidateQueries({ queryKey: ['chart-trade-positions'] });
+        void qc.invalidateQueries({ queryKey: ['orders'] });
+        void qc.invalidateQueries({ queryKey: ['positions'] });
+      }, 500);
+    },
+  });
+
+  const requestTradingLineChange = (line: TradingOverlayLine, price: number) => {
+    if (!Number.isFinite(price) || price <= 0 || !line.editTarget) return;
+    if (preferences.tradingOverlays.confirmChanges) setPendingTradingChange({ line, price });
+    else updateTradingLine.mutate({ line, price });
+  };
+
   useEffect(() => {
     setLivePrice(null);
   }, [ui.symbol]);
@@ -259,6 +323,7 @@ export default function ChartPage() {
     addAlert.error,
     delAlert.error,
     updateAlert.error,
+    updateTradingLine.error,
   ].find(Boolean) as Error | undefined;
 
   const priceChange = (selectedTicker?.price24hPcnt || 0) * 100;
@@ -314,7 +379,7 @@ export default function ChartPage() {
             : ui.tool === 'alert'
               ? 'Click repeatedly to create alerts · Esc to finish'
               : ui.tool === 'risk-reward'
-                ? 'Click Entry → Stop → Target'
+                ? 'Click Entry → Stop · Target is created automatically'
                 : 'Click a level to send its price to Calculator'}
         </span>
       </div>
@@ -337,6 +402,8 @@ export default function ChartPage() {
           manualLevels={manual.data || []}
           alerts={alerts.data || []}
           riskRewards={rr.data || []}
+          tradingLines={tradingLines}
+          liveTradingEnabled={config.data?.liveTradingEnabled ?? false}
           tool={ui.tool}
           selectedRiskReward={ui.selectedRiskReward}
           timeframe={ui.timeframe}
@@ -350,6 +417,7 @@ export default function ChartPage() {
           onDeleteLevel={(id) => delLevel.mutate(id)}
           onDeleteAlert={(id) => delAlert.mutate(id)}
           onDeleteRiskReward={(id) => delRR.mutate(id)}
+          onRequestTradingLineChange={requestTradingLineChange}
           onUsePriceLevel={(price) => ui.openCalculatorAtPrice(price)}
           onLivePrice={(price) => setLivePrice(price)}
         />
@@ -463,6 +531,19 @@ export default function ChartPage() {
         symbol={ui.symbol}
         liveEnabled={config.data?.liveTradingEnabled ?? false}
         onUpdateRiskReward={(id, patch) => updateRR.mutate({ id, patch })}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingTradingChange)}
+        title="Modify exchange order"
+        danger
+        confirmLabel="Send change"
+        onClose={() => setPendingTradingChange(null)}
+        onConfirm={() => { if (pendingTradingChange) updateTradingLine.mutate(pendingTradingChange); }}
+        body={pendingTradingChange ? <>
+          <b>{pendingTradingChange.line.symbol}</b> · {pendingTradingChange.line.accountName}<br />
+          {pendingTradingChange.line.kind.toUpperCase()} {num(pendingTradingChange.line.price, 8)} → <b>{num(pendingTradingChange.price, 8)}</b>
+        </> : null}
       />
     </div>
   );

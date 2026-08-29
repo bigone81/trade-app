@@ -16,6 +16,7 @@ import type {
   DrawingTool,
   ManualLevel,
   RiskReward,
+  TradingOverlayLine,
 } from '@trade/shared';
 import RiskRewardOverlay from './RiskRewardOverlay';
 import { readChartView, resolvedTheme, usePreferences, writeChartView } from '../preferences';
@@ -27,6 +28,8 @@ interface Props {
   manualLevels: ManualLevel[];
   alerts: AlertRecord[];
   riskRewards: RiskReward[];
+  tradingLines: TradingOverlayLine[];
+  liveTradingEnabled: boolean;
   tool: DrawingTool;
   selectedRiskReward: RiskReward | null;
   timeframe: string;
@@ -40,11 +43,12 @@ interface Props {
   onDeleteLevel: (id: number) => void;
   onDeleteAlert: (id: number) => void;
   onDeleteRiskReward: (id: number) => void;
+  onRequestTradingLineChange: (line: TradingOverlayLine, price: number) => void;
   onUsePriceLevel: (price: number) => void;
   onLivePrice?: (price: number) => void;
 }
 
-type RrDraft = { entry?: number; stop?: number; startTime?: number };
+type RrDraft = { entry?: number; startTime?: number };
 type RrHover = { price: number; time: number } | null;
 type PriceDrag = {
   kind: 'level' | 'alert';
@@ -54,6 +58,7 @@ type PriceDrag = {
   startY: number;
   moved: boolean;
 };
+type TradingDrag = { line: TradingOverlayLine; originalPrice: number; price: number; startY: number; moved: boolean };
 type WsState = 'connecting' | 'live' | 'reconnecting' | 'offline';
 
 const DEFAULT_FUTURE_BARS = 24;
@@ -65,6 +70,8 @@ const rgba = (hex: string, opacity: number) => {
   if (!Number.isFinite(n)) return hex;
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${Math.max(0, Math.min(1, opacity))})`;
 };
+
+const toLineStyle = (style: 'solid' | 'dashed' | 'dotted') => style === 'dashed' ? LineStyle.Dashed : style === 'dotted' ? LineStyle.Dotted : LineStyle.Solid;
 
 const timeframeSeconds = (timeframe: string) => {
   if (timeframe === 'D') return 86_400;
@@ -134,6 +141,7 @@ export default function TradingChart(p: Props) {
   const lines = useRef<IPriceLine[]>([]);
   const manualLineMap = useRef(new Map<number, IPriceLine>());
   const alertLineMap = useRef(new Map<number, IPriceLine>());
+  const tradingLineMap = useRef(new Map<string, IPriceLine>());
   const toolRef = useRef(p.tool);
   const timeframeRef = useRef(p.timeframe);
   const onCreateLevelRef = useRef(p.onCreateLevel);
@@ -145,6 +153,8 @@ export default function TradingChart(p: Props) {
   const [rrHover, setRrHover] = useState<RrHover>(null);
   const [priceDrag, setPriceDrag] = useState<PriceDrag | null>(null);
   const priceDragRef = useRef<PriceDrag | null>(null);
+  const [tradingDrag, setTradingDrag] = useState<TradingDrag | null>(null);
+  const tradingDragRef = useRef<TradingDrag | null>(null);
   const [overlayVersion, setOverlayVersion] = useState(0);
   const [wsState, setWsState] = useState<WsState>('connecting');
   const [isAtLiveEdge, setIsAtLiveEdge] = useState(true);
@@ -153,6 +163,8 @@ export default function TradingChart(p: Props) {
   const lastPriceReportAtRef = useRef(0);
   const restoringViewRef = useRef(false);
   const saveViewTimerRef = useRef<number | null>(null);
+  const snapPricesRef = useRef<number[]>([]);
+  const rrPreferencesRef = useRef(preferences.riskReward);
 
   toolRef.current = p.tool;
   timeframeRef.current = p.timeframe;
@@ -162,7 +174,10 @@ export default function TradingChart(p: Props) {
   onLivePriceRef.current = p.onLivePrice;
   rrDraftRef.current = rrDraft;
   priceDragRef.current = priceDrag;
+  tradingDragRef.current = tradingDrag;
   timelineCandlesRef.current = timelineCandles;
+  snapPricesRef.current = [...p.autoLevels.map((level) => level.price), ...p.manualLevels.map((level) => level.price)];
+  rrPreferencesRef.current = preferences.riskReward;
 
   useEffect(() => {
     const next = p.candles;
@@ -242,32 +257,47 @@ export default function TradingChart(p: Props) {
       }
 
       if (toolRef.current === 'risk-reward') {
+        const snapPrice = (rawPrice: number) => {
+          const prefs = rrPreferencesRef.current;
+          if (!prefs.snapToLevels) return rawPrice;
+          const rawY = s.priceToCoordinate(rawPrice);
+          if (rawY === null) return rawPrice;
+          let best = rawPrice;
+          let bestDistance = prefs.snapPixels + 1;
+          for (const candidate of snapPricesRef.current) {
+            const y = s.priceToCoordinate(candidate);
+            if (y === null) continue;
+            const distance = Math.abs(y - rawY);
+            if (distance <= prefs.snapPixels && distance < bestDistance) { best = candidate; bestDistance = distance; }
+          }
+          return best;
+        };
+        const snappedPrice = snapPrice(price);
         const draft = rrDraftRef.current;
         if (draft.entry === undefined) {
-          const next = { entry: price, startTime: time };
-          rrDraftRef.current = next;
-          setRrDraft(next);
-          return;
-        }
-        if (draft.stop === undefined) {
-          const next = { ...draft, stop: price };
+          const next = { entry: snappedPrice, startTime: time };
           rrDraftRef.current = next;
           setRrDraft(next);
           return;
         }
 
         const entry = Number(draft.entry);
-        const stop = Number(draft.stop);
+        const stop = snappedPrice;
         const startTime = Number(draft.startTime);
-        const minEnd = startTime + timeframeSeconds(timeframeRef.current);
-        const endTime = Math.max(time, minEnd);
+        const risk = Math.abs(entry - stop);
+        if (!Number.isFinite(risk) || risk <= 0) return;
+        const direction = stop < entry ? 'long' : 'short';
+        const ratio = Math.max(0.5, Number(rrPreferencesRef.current.defaultRatio) || 3);
+        const target = direction === 'long' ? entry + risk * ratio : entry - risk * ratio;
+        const widthBars = Math.max(5, Number(rrPreferencesRef.current.defaultWidthBars) || 30);
+        const endTime = startTime + timeframeSeconds(timeframeRef.current) * widthBars;
         onCreateRiskRewardRef.current({
           symbol: '',
           timeframe: timeframeRef.current,
-          direction: price >= entry ? 'long' : 'short',
+          direction,
           entry,
           stop,
-          target: price,
+          target,
           startTime,
           endTime,
         });
@@ -283,7 +313,21 @@ export default function TradingChart(p: Props) {
         return;
       }
       const point = pointData(param);
-      if (point) setRrHover(point);
+      if (point) {
+        const prefs = rrPreferencesRef.current;
+        if (prefs.snapToLevels) {
+          const rawY = s.priceToCoordinate(point.price);
+          let snapped = point.price;
+          let bestDistance = prefs.snapPixels + 1;
+          if (rawY !== null) for (const candidate of snapPricesRef.current) {
+            const y = s.priceToCoordinate(candidate);
+            if (y === null) continue;
+            const distance = Math.abs(y - rawY);
+            if (distance <= prefs.snapPixels && distance < bestDistance) { snapped = candidate; bestDistance = distance; }
+          }
+          setRrHover({ ...point, price: snapped });
+        } else setRrHover(point);
+      }
     };
 
     c.subscribeClick(click);
@@ -344,10 +388,15 @@ export default function TradingChart(p: Props) {
 
   useEffect(() => {
     if (!series) return;
+    // A manually stretched BTC price scale must never leak into SOL (or another timeframe).
+    // Lightweight Charts does not expose the exact manual price range, so symbol/timeframe
+    // changes deliberately start from a fresh autoscale instead of reusing another market's scale.
+    series.priceScale().applyOptions({ autoScale: true });
     series.setData(p.candles.map((c) => ({ ...c, time: c.time as UTCTimestamp })));
     const last = p.candles.at(-1) || null;
     lastLiveCandleRef.current = last;
     latestLogicalRef.current = Math.max(0, p.candles.length - 1);
+    window.requestAnimationFrame(() => series.priceScale().applyOptions({ autoScale: true }));
   }, [series, p.candles, p.symbol, p.timeframe]);
 
   useEffect(() => {
@@ -511,17 +560,13 @@ export default function TradingChart(p: Props) {
     lines.current = [];
     manualLineMap.current.clear();
     alertLineMap.current.clear();
+    tradingLineMap.current.clear();
 
     for (const level of p.autoLevels) {
       lines.current.push(
         series.createPriceLine({
           price: level.price,
-          color:
-            level.type === 'mirror'
-              ? '#7387ff'
-              : level.type === 'support'
-                ? '#3a9b79'
-                : '#b85b6c',
+          color: level.type === 'mirror' ? '#7387ff' : level.type === 'support' ? '#3a9b79' : '#b85b6c',
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
           axisLabelVisible: true,
@@ -533,12 +578,11 @@ export default function TradingChart(p: Props) {
     for (const level of p.manualLevels) {
       const autoColor = theme === 'light' ? '#1f2937' : '#e5e7eb';
       const selectedColor = preferences.manualLevel.colorMode === 'auto' ? autoColor : preferences.manualLevel.color;
-      const lineStyle = preferences.manualLevel.style === 'dashed' ? LineStyle.Dashed : preferences.manualLevel.style === 'dotted' ? LineStyle.Dotted : LineStyle.Solid;
       const line = series.createPriceLine({
         price: level.price,
         color: rgba(selectedColor, preferences.manualLevel.opacity),
         lineWidth: preferences.manualLevel.width,
-        lineStyle,
+        lineStyle: toLineStyle(preferences.manualLevel.style),
         axisLabelVisible: preferences.manualLevel.showPriceLabel,
         title: level.label || 'Manual',
       });
@@ -558,7 +602,37 @@ export default function TradingChart(p: Props) {
       lines.current.push(line);
       alertLineMap.current.set(alert.id, line);
     }
-  }, [series, p.autoLevels, p.manualLevels, p.alerts, theme, preferences.manualLevel]);
+
+    const overlay = preferences.tradingOverlays;
+    const accountAllowed = (accountId: number) => overlay.accountIds.length === 0 || overlay.accountIds.includes(accountId);
+    const kindVisible = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.showOrders : kind === 'position' ? overlay.showPositions : kind === 'sl' ? overlay.showStopLoss : kind === 'tp' ? overlay.showTakeProfit : overlay.showLiquidation;
+    const lineColor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? '#4da3ff' : kind === 'position' ? (theme === 'light' ? '#263244' : '#e6edf7') : kind === 'sl' ? '#ef6675' : kind === 'tp' ? '#31c48d' : '#b783ff';
+    const styleFor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.orderStyle : kind === 'position' ? overlay.positionStyle : kind === 'sl' ? overlay.stopStyle : kind === 'tp' ? overlay.targetStyle : 'dotted';
+    const titleFor = (line: TradingOverlayLine) => {
+      if (overlay.labelMode === 'price') return '';
+      const kind = line.kind === 'order' ? `${line.side === 'Buy' ? 'BUY' : line.side === 'Sell' ? 'SELL' : ''} ${line.orderType || 'ORDER'}`.trim() : line.kind === 'position' ? 'POSITION' : line.kind.toUpperCase();
+      const account = overlay.showAccountName ? ` · ${line.accountName}` : '';
+      if (overlay.labelMode === 'compact') return `${kind}${account}`;
+      const side = line.kind !== 'order' && line.side ? ` · ${line.side === 'Buy' ? 'LONG' : 'SHORT'}` : '';
+      const size = overlay.showOrderSize && line.qty ? ` · ${line.qty}` : '';
+      const pnl = overlay.showPnl && line.kind === 'position' && typeof line.pnl === 'number' && Number.isFinite(line.pnl) ? ` · PnL ${line.pnl.toFixed(2)}` : '';
+      return `${kind}${side}${size}${account}${pnl}`;
+    };
+
+    for (const tradingLine of p.tradingLines.filter((line) => accountAllowed(line.accountId) && kindVisible(line.kind))) {
+      const line = series.createPriceLine({
+        price: tradingLine.price,
+        color: rgba(lineColor(tradingLine.kind), overlay.opacity),
+        lineWidth: overlay.lineWidth,
+        lineStyle: toLineStyle(styleFor(tradingLine.kind) as any),
+        axisLabelVisible: true,
+        title: titleFor(tradingLine),
+      });
+      lines.current.push(line);
+      tradingLineMap.current.set(tradingLine.id, line);
+    }
+  }, [series, p.autoLevels, p.manualLevels, p.alerts, p.tradingLines, theme, preferences.manualLevel, preferences.tradingOverlays]);
+
 
   useEffect(() => {
     if (!chart || !p.candles.length) return;
@@ -611,8 +685,9 @@ export default function TradingChart(p: Props) {
   }, []);
 
   useEffect(() => {
-    if (!priceDrag || !series || !hostRef.current) return;
+    if (!priceDrag || !series || !hostRef.current || !chart) return;
     const host = hostRef.current;
+    chart.applyOptions({ handleScroll: false, handleScale: false });
 
     const move = (event: PointerEvent) => {
       const current = priceDragRef.current;
@@ -621,63 +696,116 @@ export default function TradingChart(p: Props) {
       const y = event.clientY - rect.top;
       const price = series.coordinateToPrice(y);
       if (!price || price <= 0) return;
-      const next = {
-        ...current,
-        price,
-        moved: current.moved || Math.abs(y - current.startY) > 2,
-      };
+      const next = { ...current, price, moved: current.moved || Math.abs(y - current.startY) > 2 };
       priceDragRef.current = next;
       setPriceDrag(next);
-      const line =
-        next.kind === 'level'
-          ? manualLineMap.current.get(next.id)
-          : alertLineMap.current.get(next.id);
+      const line = next.kind === 'level' ? manualLineMap.current.get(next.id) : alertLineMap.current.get(next.id);
       line?.applyOptions({ price });
     };
 
-    const up = () => {
+    const finish = () => {
       const current = priceDragRef.current;
       if (current) {
         if (current.moved) {
           if (current.kind === 'level') p.onUpdateLevel(current.id, current.price);
           else p.onUpdateAlert(current.id, current.price);
-        } else {
+        } else if (p.tool === 'select') {
           p.onUsePriceLevel(current.originalPrice);
         }
       }
+      chart.applyOptions({ handleScroll: true, handleScale: true });
       priceDragRef.current = null;
       setPriceDrag(null);
     };
 
     window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up, { once: true });
+    window.addEventListener('pointerup', finish, { once: true });
+    window.addEventListener('pointercancel', finish, { once: true });
     return () => {
       window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      chart.applyOptions({ handleScroll: true, handleScale: true });
     };
-  }, [priceDrag, series, p.onUpdateLevel, p.onUpdateAlert, p.onUsePriceLevel]);
+  }, [priceDrag, series, chart, p.tool, p.onUpdateLevel, p.onUpdateAlert, p.onUsePriceLevel]);
 
-  const startPriceDrag = (
-    kind: 'level' | 'alert',
-    id: number,
-    price: number,
-    event: any,
-  ) => {
-    if (p.tool !== 'select' || !hostRef.current) return;
+  const startPriceDrag = (kind: 'level' | 'alert', id: number, price: number, event: any) => {
+    if (!hostRef.current) return;
     event.stopPropagation();
     event.preventDefault();
     const rect = hostRef.current.getBoundingClientRect();
-    const next: PriceDrag = {
-      kind,
-      id,
-      originalPrice: price,
-      price,
-      startY: event.clientY - rect.top,
-      moved: false,
-    };
+    const next: PriceDrag = { kind, id, originalPrice: price, price, startY: event.clientY - rect.top, moved: false };
     priceDragRef.current = next;
     setPriceDrag(next);
   };
+
+  useEffect(() => {
+    if (!tradingDrag || !series || !hostRef.current || !chart) return;
+    const host = hostRef.current;
+    chart.applyOptions({ handleScroll: false, handleScale: false });
+
+    const move = (event: PointerEvent) => {
+      const current = tradingDragRef.current;
+      if (!current) return;
+      const rect = host.getBoundingClientRect();
+      const y = event.clientY - rect.top;
+      const price = series.coordinateToPrice(y);
+      if (!price || price <= 0) return;
+      const next = { ...current, price, moved: current.moved || Math.abs(y - current.startY) > 2 };
+      tradingDragRef.current = next;
+      setTradingDrag(next);
+      tradingLineMap.current.get(next.line.id)?.applyOptions({ price });
+    };
+
+    const finish = () => {
+      const current = tradingDragRef.current;
+      if (current) {
+        tradingLineMap.current.get(current.line.id)?.applyOptions({ price: current.originalPrice });
+        if (current.moved) p.onRequestTradingLineChange(current.line, current.price);
+      }
+      chart.applyOptions({ handleScroll: true, handleScale: true });
+      tradingDragRef.current = null;
+      setTradingDrag(null);
+    };
+
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', finish, { once: true });
+    window.addEventListener('pointercancel', finish, { once: true });
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      chart.applyOptions({ handleScroll: true, handleScale: true });
+    };
+  }, [tradingDrag, series, chart, p.onRequestTradingLineChange]);
+
+  const canDragTradingLine = (line: TradingOverlayLine) => {
+    if (!p.liveTradingEnabled || !line.editTarget) return false;
+    if (line.kind === 'order') return preferences.tradingOverlays.allowDragOrders;
+    if (line.kind === 'sl') return preferences.tradingOverlays.allowDragStops;
+    if (line.kind === 'tp') return preferences.tradingOverlays.allowDragTargets;
+    return false;
+  };
+
+  const startTradingDrag = (line: TradingOverlayLine, event: any) => {
+    if (!canDragTradingLine(line) || !hostRef.current) return;
+    event.stopPropagation();
+    event.preventDefault();
+    const rect = hostRef.current.getBoundingClientRect();
+    const next: TradingDrag = { line, originalPrice: line.price, price: line.price, startY: event.clientY - rect.top, moved: false };
+    tradingDragRef.current = next;
+    setTradingDrag(next);
+  };
+
+  const visibleTradingLines = p.tradingLines.filter((line) => {
+    const overlay = preferences.tradingOverlays;
+    if (overlay.accountIds.length && !overlay.accountIds.includes(line.accountId)) return false;
+    if (line.kind === 'order') return overlay.showOrders;
+    if (line.kind === 'position') return overlay.showPositions;
+    if (line.kind === 'sl') return overlay.showStopLoss;
+    if (line.kind === 'tp') return overlay.showTakeProfit;
+    return overlay.showLiquidation;
+  });
 
   const timeToCoordinate = (time: number) => {
     if (!chart) return null;
@@ -691,14 +819,19 @@ export default function TradingChart(p: Props) {
     return (chart.timeScale() as any).logicalToCoordinate(logical) as number | null;
   };
 
-  const entryY =
-    series && rrDraft.entry !== undefined ? series.priceToCoordinate(rrDraft.entry) : null;
-  const stopY =
-    series && rrDraft.stop !== undefined ? series.priceToCoordinate(rrDraft.stop) : null;
-  const hoverY = series && rrHover ? series.priceToCoordinate(rrHover.price) : null;
-  const draftX1 =
-    rrDraft.startTime !== undefined ? timeToCoordinate(rrDraft.startTime) : null;
-  const draftX2 = rrHover ? timeToCoordinate(rrHover.time) : null;
+  const entryY = series && rrDraft.entry !== undefined ? series.priceToCoordinate(rrDraft.entry) : null;
+  const previewStop = rrDraft.entry !== undefined && rrHover ? rrHover.price : null;
+  const previewDirection = rrDraft.entry !== undefined && previewStop !== null ? (previewStop < rrDraft.entry ? 'long' : 'short') : null;
+  const previewRisk = rrDraft.entry !== undefined && previewStop !== null ? Math.abs(rrDraft.entry - previewStop) : 0;
+  const previewTarget = rrDraft.entry !== undefined && previewDirection
+    ? (previewDirection === 'long' ? rrDraft.entry + previewRisk * preferences.riskReward.defaultRatio : rrDraft.entry - previewRisk * preferences.riskReward.defaultRatio)
+    : null;
+  const stopY = series && previewStop !== null ? series.priceToCoordinate(previewStop) : null;
+  const targetY = series && previewTarget !== null ? series.priceToCoordinate(previewTarget) : null;
+  const draftX1 = rrDraft.startTime !== undefined ? timeToCoordinate(rrDraft.startTime) : null;
+  const draftX2 = rrDraft.startTime !== undefined
+    ? timeToCoordinate(rrDraft.startTime + timeframeSeconds(p.timeframe) * preferences.riskReward.defaultWidthBars)
+    : null;
 
   const returnToLive = () => {
     if (!chart) return;
@@ -716,7 +849,7 @@ export default function TradingChart(p: Props) {
   }, [wsState, isAtLiveEdge]);
 
   return (
-    <div className={priceDrag ? 'chart-card drawing-dragging' : 'chart-card'}>
+    <div className={priceDrag || tradingDrag ? 'chart-card drawing-dragging' : 'chart-card'}>
       <div ref={hostRef} className="chart-host" />
 
       <button
@@ -788,11 +921,7 @@ export default function TradingChart(p: Props) {
                   width={hostRef.current!.clientWidth}
                   height="14"
                   fill="transparent"
-                  className={
-                    p.tool === 'select'
-                      ? 'price-line-click-target active draggable'
-                      : 'price-line-click-target'
-                  }
+                  className="price-line-click-target active draggable"
                   onPointerDown={(event) =>
                     startPriceDrag('level', level.id, level.price, event)
                   }
@@ -831,11 +960,7 @@ export default function TradingChart(p: Props) {
                     width={hostRef.current!.clientWidth}
                     height="14"
                     fill="transparent"
-                    className={
-                      p.tool === 'select'
-                        ? 'price-line-click-target active draggable alert-hit'
-                        : 'price-line-click-target'
-                    }
+                    className="price-line-click-target active draggable alert-hit"
                     onPointerDown={(event) =>
                       startPriceDrag('alert', alert.id, alert.price, event)
                     }
@@ -855,6 +980,25 @@ export default function TradingChart(p: Props) {
                 </g>
               );
             })}
+
+          {visibleTradingLines.map((line) => {
+            const shownPrice = tradingDrag?.line.id === line.id ? tradingDrag.price : line.price;
+            const y = series.priceToCoordinate(shownPrice);
+            if (y === null) return null;
+            const draggable = canDragTradingLine(line);
+            return (
+              <rect
+                key={`trading-hit-${line.id}`}
+                x="0"
+                y={y - 8}
+                width={hostRef.current!.clientWidth}
+                height="16"
+                fill="transparent"
+                className={draggable ? 'trading-line-hit draggable' : 'trading-line-hit'}
+                onPointerDown={(event) => startTradingDrag(line, event)}
+              />
+            );
+          })}
         </svg>
       )}
 
@@ -863,53 +1007,28 @@ export default function TradingChart(p: Props) {
           <div className="rr-draft-help">
             Risk/Reward:{' '}
             {rrDraft.entry === undefined
-              ? '1/3 — click Entry'
-              : rrDraft.stop === undefined
-                ? `2/3 — click Stop · Entry ${rrDraft.entry.toFixed(4)}`
-                : `3/3 — click Target / width · Entry ${rrDraft.entry.toFixed(4)} · Stop ${rrDraft.stop.toFixed(4)}`}
+              ? '1/2 — click Entry'
+              : `2/2 — click Stop · Target ${preferences.riskReward.defaultRatio}R is automatic`}
             <span>Esc = cancel</span>
           </div>
 
           {entryY !== null && <div className="rr-draft-line entry" style={{ top: entryY }} />}
           {stopY !== null && <div className="rr-draft-line stop" style={{ top: stopY }} />}
+          {targetY !== null && <div className="rr-draft-line target" style={{ top: targetY }} />}
 
-          {rrDraft.stop !== undefined &&
-            rrHover &&
-            entryY !== null &&
-            stopY !== null &&
-            hoverY !== null &&
-            draftX1 !== null &&
-            draftX2 !== null && (
-              <svg
-                className="chart-overlay rr-draft-overlay"
-                width={hostRef.current?.clientWidth || 0}
-                height={hostRef.current?.clientHeight || 0}
-              >
-                {(() => {
-                  const left = Math.min(draftX1, draftX2);
-                  const right = Math.max(draftX1, draftX2);
-                  const width = Math.max(24, right - left);
-                  return (
-                    <>
-                      <rect
-                        className="rr-reward rr-draft-box"
-                        x={left}
-                        y={Math.min(entryY, hoverY)}
-                        width={width}
-                        height={Math.max(1, Math.abs(hoverY - entryY))}
-                      />
-                      <rect
-                        className="rr-risk rr-draft-box"
-                        x={left}
-                        y={Math.min(entryY, stopY)}
-                        width={width}
-                        height={Math.max(1, Math.abs(stopY - entryY))}
-                      />
-                    </>
-                  );
-                })()}
-              </svg>
-            )}
+          {rrHover && entryY !== null && stopY !== null && targetY !== null && draftX1 !== null && draftX2 !== null && (
+            <svg className="chart-overlay rr-draft-overlay" width={hostRef.current?.clientWidth || 0} height={hostRef.current?.clientHeight || 0}>
+              {(() => {
+                const left = Math.min(draftX1, draftX2);
+                const right = Math.max(draftX1, draftX2);
+                const width = Math.max(24, right - left);
+                return <>
+                  <rect className="rr-reward rr-draft-box" x={left} y={Math.min(entryY, targetY)} width={width} height={Math.max(1, Math.abs(targetY - entryY))} />
+                  <rect className="rr-risk rr-draft-box" x={left} y={Math.min(entryY, stopY)} width={width} height={Math.max(1, Math.abs(stopY - entryY))} />
+                </>;
+              })()}
+            </svg>
+          )}
         </>
       )}
     </div>
