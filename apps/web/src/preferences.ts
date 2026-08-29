@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
+export type AppLanguage = 'en' | 'uk' | 'ru';
 export type LevelLineStyle = 'solid' | 'dashed' | 'dotted';
 export type TradingOverlayLabelMode = 'full' | 'compact' | 'price';
 
 export interface AppPreferences {
   theme: ThemeMode;
+  language: AppLanguage;
   defaultRiskPercent: number;
   defaultAccountId: number;
   accountRiskPercent: Record<string, number | null>;
@@ -58,6 +60,7 @@ const EVENT = 'trade-settings-changed';
 
 export const defaultPreferences: AppPreferences = {
   theme: 'dark',
+  language: 'en',
   defaultRiskPercent: 0.5,
   defaultAccountId: 0,
   accountRiskPercent: {},
@@ -135,6 +138,7 @@ export function applyTheme(preferences = readPreferences()) {
   const theme = resolvedTheme(preferences.theme);
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
+  document.documentElement.lang = preferences.language;
 }
 
 export function writePreferences(next: AppPreferences) {

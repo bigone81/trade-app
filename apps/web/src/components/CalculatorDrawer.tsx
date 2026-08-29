@@ -6,6 +6,7 @@ import type { AccountPublic, AutoLevel, ManualLevel, RiskReward } from '@trade/s
 import { api, json, money, num } from '../api';
 import { effectiveRiskPercent, usePreferences } from '../preferences';
 import ConfirmDialog from './ConfirmDialog';
+import { useI18n } from '../i18n';
 
 interface Props {
   open: boolean;
@@ -37,6 +38,7 @@ export default function CalculatorDrawer({
   onUpdateRiskReward,
 }: Props) {
   const { preferences } = usePreferences();
+  const { t, language } = useI18n();
   const [accountId, setAccountId] = useState(() => preferences.defaultAccountId || accounts[0]?.id || 0);
   const [risk, setRisk] = useState(() => effectiveRiskPercent(preferences, preferences.defaultAccountId || accounts[0]?.id || 0));
   const [mode, setMode] = useState<'stop' | 'limit' | 'market'>('limit');
@@ -128,14 +130,14 @@ export default function CalculatorDrawer({
       ...manualLevels.map((level) => ({
         key: `manual-${level.id}`,
         price: level.price,
-        label: level.label || 'Manual',
+        label: level.label || t('Manual'),
         kind: 'manual' as const,
         touches: 0,
       })),
       ...autoLevels.map((level, index) => ({
         key: `auto-${level.type}-${level.price}-${index}`,
         price: level.price,
-        label: level.type === 'mirror' ? 'Mirror' : level.type === 'support' ? 'Support' : 'Resistance',
+        label: level.type === 'mirror' ? t('Mirror') : level.type === 'support' ? t('Support') : t('Resistance'),
         kind: 'auto' as const,
         touches: level.touches,
       })),
@@ -148,7 +150,7 @@ export default function CalculatorDrawer({
         return Math.abs(a.price - anchor) - Math.abs(b.price - anchor);
       })
       .slice(0, 24);
-  }, [manualLevels, autoLevels, currentPrice, priceLevel]);
+  }, [manualLevels, autoLevels, currentPrice, priceLevel, t]);
 
   const legacy = useMemo(() => calculateTrade({
     mode,
@@ -229,9 +231,9 @@ export default function CalculatorDrawer({
     <aside className={open ? 'drawer calculator-drawer' : 'drawer calculator-drawer closed'}>
       <div className="drawer-head">
         <div>
-          <h2>Trade calculator</h2>
+          <h2>{t('Trade calculator')}</h2>
           <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-            {selected ? `Risk/Reward #${selected.id}` : 'Legacy calculator'} · {symbol}
+            {selected ? `Risk/Reward #${selected.id}` : t('Legacy calculator')} · {symbol}
           </div>
         </div>
         <button className="icon-btn" onClick={onClose}><X size={16} /></button>
@@ -239,43 +241,43 @@ export default function CalculatorDrawer({
 
       {error && <div className="inline-error">{error}</div>}
       {!liveEnabled && <div className="inline-error" style={{ background: '#2d2717', borderColor: '#5a4a21', color: '#e6c875' }}>
-        Trading actions are locked by LIVE_TRADING_ENABLED=false.
+        {t('Trading actions are locked by LIVE_TRADING_ENABLED=false.')}
       </div>}
-      {!validGeometry && <div className="inline-error">Invalid SL/TP geometry for {side}. Check Entry, Stop and Target.</div>}
+      {!validGeometry && <div className="inline-error">{t('Invalid SL/TP geometry for {side}. Check Entry, Stop and Target.',{side:t(side)})}</div>}
 
       <div className="field">
-        <label>Account</label>
+        <label>{t('Account')}</label>
         <select className="select" value={accountId} onChange={(e) => setAccountId(Number(e.target.value))}>
-          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}{a.demo ? ' · demo' : ''}{!a.configured ? ' · not configured' : ''}</option>)}
+          {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}{a.demo ? ' · demo' : ''}{!a.configured ? ` · ${t('not configured')}` : ''}</option>)}
         </select>
       </div>
 
       <div className="field-grid">
-        <div className="field"><label>Side</label><select className="select" value={side} onChange={(e) => setSide(e.target.value as any)}><option>Buy</option><option>Sell</option></select></div>
-        <div className="field"><label>Order</label><select className="select" value={mode} onChange={(e) => setMode(e.target.value as any)}><option value="limit">Limit</option><option value="stop">Stop Limit</option><option value="market">Market</option></select></div>
+        <div className="field"><label>{t('Side')}</label><select className="select" value={side} onChange={(e) => setSide(e.target.value as any)}><option value="Buy">{t('Buy')}</option><option value="Sell">{t('Sell')}</option></select></div>
+        <div className="field"><label>{t('Order')}</label><select className="select" value={mode} onChange={(e) => setMode(e.target.value as any)}><option value="limit">Limit</option><option value="stop">Stop Limit</option><option value="market">Market</option></select></div>
       </div>
 
       {selected ? (
         <div className="drawer-section">
-          {mode === 'stop' && <div className="field"><label>Trigger</label><input className="input" type="number" step="any" value={trigger || ''} onChange={(e) => setTrigger(Number(e.target.value))} /></div>}
-          <div className="field"><label>Entry</label><input className="input" type="number" step="any" value={entry || ''} onChange={(e) => changeDrawing('entry', Number(e.target.value))} /></div>
+          {mode === 'stop' && <div className="field"><label>{t('Trigger')}</label><input className="input" type="number" step="any" value={trigger || ''} onChange={(e) => setTrigger(Number(e.target.value))} /></div>}
+          <div className="field"><label>{t('Entry')}</label><input className="input" type="number" step="any" value={entry || ''} onChange={(e) => changeDrawing('entry', Number(e.target.value))} /></div>
           <div className="field-grid">
-            <div className="field"><label>Stop Loss</label><input className="input" type="number" step="any" value={stop || ''} onChange={(e) => changeDrawing('stop', Number(e.target.value))} /></div>
-            <div className="field"><label>Take Profit</label><input className="input" type="number" step="any" value={target || ''} onChange={(e) => changeDrawing('target', Number(e.target.value))} /></div>
+            <div className="field"><label>{t('Stop Loss')}</label><input className="input" type="number" step="any" value={stop || ''} onChange={(e) => changeDrawing('stop', Number(e.target.value))} /></div>
+            <div className="field"><label>{t('Take Profit')}</label><input className="input" type="number" step="any" value={target || ''} onChange={(e) => changeDrawing('target', Number(e.target.value))} /></div>
           </div>
         </div>
       ) : (
         <div className="drawer-section">
-          <div className="field"><label>Stop model</label><select className="select" value={stopMode} onChange={(e) => setStopMode(e.target.value as any)}><option value="atr">ATR calculated</option><option value="technical">Technical stop</option></select></div>
+          <div className="field"><label>{t('Stop model')}</label><select className="select" value={stopMode} onChange={(e) => setStopMode(e.target.value as any)}><option value="atr">{t('ATR calculated')}</option><option value="technical">{t('Technical stop')}</option></select></div>
           <div className="field">
-            <label>Price level</label>
+            <label>{t('Price level')}</label>
             <input className="input" type="number" step="any" value={priceLevel || ''} onChange={(e) => applyPriceLevel(Number(e.target.value))} />
-            {mode === 'market' && <small className="muted">Market calculations use the current market price; the selected level is kept here for reference.</small>}
+            {mode === 'market' && <small className="muted">{t('Market calculations use the current market price; the selected level is kept here for reference.')}</small>}
           </div>
 
           <div className="calculator-levels">
             <div className="calculator-levels-head">
-              <span>Levels</span>
+              <span>{t('Levels')}</span>
               <small>{calculatorLevels.length}</small>
             </div>
             <div className="calculator-level-list">
@@ -292,51 +294,51 @@ export default function CalculatorDrawer({
                   <strong>{num(level.price, 8)}</strong>
                 </button>
               ))}
-              {!calculatorLevels.length && <div className="calculator-level-empty">No visible levels</div>}
+              {!calculatorLevels.length && <div className="calculator-level-empty">{t('No visible levels')}</div>}
             </div>
           </div>
 
           {mode === 'stop' && <div className="field-grid"><div className="field"><label>Trigger % ATR</label><input className="input" type="number" step="0.1" value={triggerAtr} onChange={(e) => setTriggerAtr(Number(e.target.value))} /></div><div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div></div>}
           {mode === 'limit' && <div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div>}
-          {stopMode === 'atr' ? <div className="field"><label>SL % ATR</label><input className="input" type="number" step="0.5" value={stopAtr} onChange={(e) => setStopAtr(Number(e.target.value))} /></div> : <div className="field"><label>Technical SL</label><input className="input" type="number" step="any" value={technicalStop || ''} onChange={(e) => setTechnicalStop(Number(e.target.value))} /></div>}
-          <div className="field"><label>Target R:R</label><input className="input" type="number" step="0.5" min="0.5" value={legacyRr} onChange={(e) => setLegacyRr(Number(e.target.value))} /></div>
-          <div className="muted" style={{ fontSize: 10 }}>Legacy strategy pointType: {legacy.pointType}</div>
+          {stopMode === 'atr' ? <div className="field"><label>SL % ATR</label><input className="input" type="number" step="0.5" value={stopAtr} onChange={(e) => setStopAtr(Number(e.target.value))} /></div> : <div className="field"><label>{t('Technical SL')}</label><input className="input" type="number" step="any" value={technicalStop || ''} onChange={(e) => setTechnicalStop(Number(e.target.value))} /></div>}
+          <div className="field"><label>{t('Target R:R')}</label><input className="input" type="number" step="0.5" min="0.5" value={legacyRr} onChange={(e) => setLegacyRr(Number(e.target.value))} /></div>
+          <div className="muted" style={{ fontSize: 10 }}>{t('Legacy strategy pointType: {value}',{value:legacy.pointType})}</div>
         </div>
       )}
 
       <div className="field-grid">
-        <div className="field"><label>Risk %</label><input className="input" type="number" step="0.1" min="0" value={risk} onChange={(e) => setRisk(Number(e.target.value))} /></div>
+        <div className="field"><label>{t('Risk %')}</label><input className="input" type="number" step="0.1" min="0" value={risk} onChange={(e) => setRisk(Number(e.target.value))} /></div>
         <div className="field"><label>ATR (D,14)</label><input className="input" value={atr ? num(atr, 6) : '—'} readOnly /></div>
       </div>
 
       <div className="drawer-section">
         <div className="metric-grid">
-          <div className="metric"><small>Equity</small><strong>{money(balance)}</strong></div>
-          <div className="metric"><small>Risk amount</small><strong>{money(values.riskAmount)}</strong></div>
-          <div className="metric"><small>Entry</small><strong>{num(values.entry, 8)}</strong></div>
-          <div className="metric"><small>Stop</small><strong>{num(values.stop, 8)}</strong></div>
-          <div className="metric"><small>Target</small><strong>{num(values.target, 8)}</strong></div>
+          <div className="metric"><small>{t('Equity')}</small><strong>{money(balance)}</strong></div>
+          <div className="metric"><small>{t('Risk amount')}</small><strong>{money(values.riskAmount)}</strong></div>
+          <div className="metric"><small>{t('Entry')}</small><strong>{num(values.entry, 8)}</strong></div>
+          <div className="metric"><small>{t('Stop')}</small><strong>{num(values.stop, 8)}</strong></div>
+          <div className="metric"><small>{t('Target')}</small><strong>{num(values.target, 8)}</strong></div>
           <div className="metric"><small>R:R</small><strong>{Number(values.rr).toFixed(2)}</strong></div>
-          <div className="metric"><small>Position qty</small><strong>{num(values.positionSize, 8)}</strong></div>
-          <div className="metric"><small>Notional</small><strong>{money(notional)}</strong></div>
+          <div className="metric"><small>{t('Position qty')}</small><strong>{num(values.positionSize, 8)}</strong></div>
+          <div className="metric"><small>{t('Notional')}</small><strong>{money(notional)}</strong></div>
         </div>
       </div>
 
       <div className="drawer-actions">
         <button className="btn primary" disabled={!liveEnabled || !validGeometry || !values.positionSize || !balance || place.isPending} onClick={() => setConfirmOpen(true)}>
-          Place order <ChevronRight size={16} />
+          {t('Place order')} <ChevronRight size={16} />
         </button>
-        <small className="muted">Prices and quantity are aligned to Bybit tickSize / qtyStep on the server before submission.</small>
+        <small className="muted">{t('Prices and quantity are aligned to Bybit tickSize / qtyStep on the server before submission.')}</small>
       </div>
 
       <ConfirmDialog
         open={confirmOpen}
-        title="Confirm order"
+        title={t('Confirm order')}
         danger
-        confirmLabel="Send to Bybit"
+        confirmLabel={t('Send to Bybit')}
         onClose={() => setConfirmOpen(false)}
         onConfirm={() => place.mutate()}
-        body={<><b>{symbol} {side}</b><br />{mode.toUpperCase()} · qty {num(values.positionSize, 8)}<br />Entry {num(values.entry, 8)} · SL {num(values.stop, 8)} · TP {num(values.target, 8)}<br />Risk {money(values.riskAmount)} · R:R {Number(values.rr).toFixed(2)}</>}
+        body={<><b>{symbol} {t(side)}</b><br />{mode.toUpperCase()} · {t('Qty')} {num(values.positionSize, 8)}<br />{t('Entry')} {num(values.entry, 8)} · SL {num(values.stop, 8)} · TP {num(values.target, 8)}<br />{language==='uk'?'Ризик':language==='ru'?'Риск':'Risk'} {money(values.riskAmount)} · R:R {Number(values.rr).toFixed(2)}</>}
       />
     </aside>
   );

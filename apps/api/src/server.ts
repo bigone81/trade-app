@@ -120,7 +120,7 @@ app.post('/api/notifications/read-all',async()=>({ok:true,updated:markAllNotific
 app.get('/api/notification-settings',async()=>getNotificationSettings(db));
 app.put('/api/notification-settings',async(req)=>{
   const patch=z.object({
-    marketAlerts:z.boolean().optional(),marketPreAlerts:z.boolean().optional(),tradingAccepted:z.boolean().optional(),tradingFilled:z.boolean().optional(),tradingPartial:z.boolean().optional(),tradingCancelled:z.boolean().optional(),tradingRejected:z.boolean().optional(),
+    language:z.enum(['en','uk','ru']).optional(),marketAlerts:z.boolean().optional(),marketPreAlerts:z.boolean().optional(),tradingAccepted:z.boolean().optional(),tradingFilled:z.boolean().optional(),tradingPartial:z.boolean().optional(),tradingCancelled:z.boolean().optional(),tradingRejected:z.boolean().optional(),
     systemOffline:z.boolean().optional(),systemReconnect:z.boolean().optional(),telegramMarket:z.boolean().optional(),telegramTrading:z.boolean().optional(),telegramSystem:z.boolean().optional(),systemOfflineSeconds:z.number().int().min(10).max(600).optional(),
   }).parse(req.body);
   return updateNotificationSettings(db,patch);
@@ -128,12 +128,16 @@ app.put('/api/notification-settings',async(req)=>{
 
 app.post('/api/notifications/test',async(req,reply)=>{
   const b=z.object({telegram:z.boolean().default(false)}).parse(req.body??{});
-  const row=createNotification(db,{category:'system',eventType:'notification.test',severity:'info',title:'Test notification',message:'Trade App notification center is working.',actionUrl:'/settings'});
+  const language=getNotificationSettings(db).language;
+  const title=language==='uk'?'Тестове сповіщення':language==='ru'?'Тестовое уведомление':'Test notification';
+  const message=language==='uk'?'Центр сповіщень Trade App працює.':language==='ru'?'Центр уведомлений Trade App работает.':'Trade App notification center is working.';
+  const row=createNotification(db,{category:'system',eventType:'notification.test',severity:'info',title,message,actionUrl:'/settings'});
   if(!row)return reply.code(500).send({error:'Could not create test notification'});
   if(b.telegram){
     const token=process.env.TELEGRAM_BOT_TOKEN||'';const chatId=process.env.TELEGRAM_CHAT_ID||'';
     if(!token||!chatId){markNotificationTelegram(db,row.id,'not_configured');return {...row,telegramStatus:'not_configured'};}
-    try{const r=await fetch(`https://api.telegram.org/bot${token}/sendMessage`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:chatId,text:'✅ <b>Trade App</b>\n\nТестовое уведомление работает.',parse_mode:'HTML'})});if(!r.ok)throw new Error(`Telegram HTTP ${r.status}: ${await r.text()}`);markNotificationTelegram(db,row.id,'sent');}
+    const telegramText=language==='uk'?'✅ <b>Trade App</b>\n\nТестове сповіщення працює.':language==='ru'?'✅ <b>Trade App</b>\n\nТестовое уведомление работает.':'✅ <b>Trade App</b>\n\nTest notification is working.';
+    try{const r=await fetch(`https://api.telegram.org/bot${token}/sendMessage`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:chatId,text:telegramText,parse_mode:'HTML'})});if(!r.ok)throw new Error(`Telegram HTTP ${r.status}: ${await r.text()}`);markNotificationTelegram(db,row.id,'sent');}
     catch(e){const message=e instanceof Error?e.message:String(e);markNotificationTelegram(db,row.id,'error',message);return reply.code(502).send({error:message});}
   }
   return row;

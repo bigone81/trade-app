@@ -49,10 +49,11 @@ function scheduleOffline(key:string,input:{title:string;accountId?:number;accoun
   state.timer=setTimeout(()=>{
     state.timer=null;
     if(!settings.systemOffline)return;
-    const message=`${state.title} не отвечает более ${settings.systemOfflineSeconds} сек.`;
-    const n=createNotification(db,{category:'system',eventType:'connection.offline',severity:'warning',title:'Проблема соединения',message,accountId:state.accountId??null,accountName:state.accountName??null,actionUrl:'/settings',dedupeKey:`offline:${key}:${state.offlineAt}`});
+    const title=settings.language==='uk'?'Проблема з’єднання':settings.language==='ru'?'Проблема соединения':'Connection problem';
+    const message=settings.language==='uk'?`${state.title} не відповідає понад ${settings.systemOfflineSeconds} сек.`:settings.language==='ru'?`${state.title} не отвечает более ${settings.systemOfflineSeconds} сек.`:`${state.title} has been offline for more than ${settings.systemOfflineSeconds} sec.`;
+    const n=createNotification(db,{category:'system',eventType:'connection.offline',severity:'warning',title,message,accountId:state.accountId??null,accountName:state.accountName??null,actionUrl:'/settings',dedupeKey:`offline:${key}:${state.offlineAt}`});
     state.notified=Boolean(n);connections.set(key,state);
-    void deliverTelegram(n,`⚠️ <b>Проблема соединения</b>\n\n${message}`,settings.telegramSystem);
+    void deliverTelegram(n,`⚠️ <b>${title}</b>\n\n${message}`,settings.telegramSystem);
   },settings.systemOfflineSeconds*1000);
   connections.set(key,state);
 }
@@ -64,9 +65,10 @@ function restored(key:string,input:{title:string;accountId?:number;accountName?:
     const settings=getNotificationSettings(db);
     if(settings.systemReconnect){
       const downtime=Math.max(1,Math.round((Date.now()-state.offlineAt)/1000));
-      const message=`${input.title} восстановлено. Простой: ${downtime} сек.`;
-      const n=createNotification(db,{category:'system',eventType:'connection.restored',severity:'info',title:'Соединение восстановлено',message,accountId:input.accountId??null,accountName:input.accountName??null,actionUrl:'/settings',dedupeKey:`restored:${key}:${state.offlineAt}`});
-      void deliverTelegram(n,`✅ <b>Соединение восстановлено</b>\n\n${message}`,settings.telegramSystem);
+      const title=settings.language==='uk'?'З’єднання відновлено':settings.language==='ru'?'Соединение восстановлено':'Connection restored';
+      const message=settings.language==='uk'?`${input.title} відновлено. Простій: ${downtime} сек.`:settings.language==='ru'?`${input.title} восстановлено. Простой: ${downtime} сек.`:`${input.title} restored. Downtime: ${downtime} sec.`;
+      const n=createNotification(db,{category:'system',eventType:'connection.restored',severity:'info',title,message,accountId:input.accountId??null,accountName:input.accountName??null,actionUrl:'/settings',dedupeKey:`restored:${key}:${state.offlineAt}`});
+      void deliverTelegram(n,`✅ <b>${title}</b>\n\n${message}`,settings.telegramSystem);
     }
   }
   connections.delete(key);
@@ -86,9 +88,11 @@ async function onPrice(symbol:string,price:number){
     const distance=Math.abs(price-a.price)/a.price*100;
     if(settings.marketPreAlerts && a.preAlertPercent!==null && !a.preAlertedAt && distance<=a.preAlertPercent){
       db.prepare('UPDATE alerts SET pre_alerted_at=CURRENT_TIMESTAMP,last_price=? WHERE id=?').run(price,a.id);
-      const message=`${symbol} приближается к ${a.price}. Цена ${price}, расстояние ${distance.toFixed(3)}%.`;
-      const n=createNotification(db,{category:'market',eventType:'alert.pre',severity:'info',title:`${symbol} приближается к уровню`,message,symbol,actionUrl:`/?symbol=${encodeURIComponent(symbol)}`,payload:{alertId:a.id,level:a.price,price,distance}});
-      void deliverTelegram(n,`🟡 <b>${symbol}</b> приближается к уровню\n\nУровень: <b>${a.price}</b>\nЦена: ${price}\nРасстояние: ${distance.toFixed(3)}%`,a.telegramEnabled&&settings.telegramMarket);
+      const title=settings.language==='uk'?`${symbol} наближається до рівня`:settings.language==='ru'?`${symbol} приближается к уровню`:`${symbol} approaching level`;
+      const message=settings.language==='uk'?`${symbol} наближається до ${a.price}. Ціна ${price}, відстань ${distance.toFixed(3)}%.`:settings.language==='ru'?`${symbol} приближается к ${a.price}. Цена ${price}, расстояние ${distance.toFixed(3)}%.`:`${symbol} is approaching ${a.price}. Price ${price}, distance ${distance.toFixed(3)}%.`;
+      const n=createNotification(db,{category:'market',eventType:'alert.pre',severity:'info',title,message,symbol,actionUrl:`/?symbol=${encodeURIComponent(symbol)}`,payload:{alertId:a.id,level:a.price,price,distance}});
+      const telegramText=settings.language==='uk'?`🟡 <b>${symbol}</b> наближається до рівня\n\nРівень: <b>${a.price}</b>\nЦіна: ${price}\nВідстань: ${distance.toFixed(3)}%`:settings.language==='ru'?`🟡 <b>${symbol}</b> приближается к уровню\n\nУровень: <b>${a.price}</b>\nЦена: ${price}\nРасстояние: ${distance.toFixed(3)}%`:`🟡 <b>${symbol}</b> approaching level\n\nLevel: <b>${a.price}</b>\nPrice: ${price}\nDistance: ${distance.toFixed(3)}%`;
+      void deliverTelegram(n,telegramText,a.telegramEnabled&&settings.telegramMarket);
     }
     if(previous===undefined){db.prepare('UPDATE alerts SET last_price=? WHERE id=?').run(price,a.id);continue;}
     const hit=a.condition==='cross_up' ? previous<a.price&&price>=a.price : a.condition==='cross_down' ? previous>a.price&&price<=a.price : crossed(previous,price,a.price)||distance<=0.02;
@@ -96,10 +100,12 @@ async function onPrice(symbol:string,price:number){
     db.prepare(`UPDATE alerts SET last_price=?,triggered_at=CURRENT_TIMESTAMP,active=CASE WHEN trigger_once=1 THEN 0 ELSE active END WHERE id=?`).run(price,a.id);
     appendSystemEvent(db,{eventType:'alert.triggered',symbol,message:`${symbol} reached ${a.price}`,payload:{alertId:a.id,price}});
     if(settings.marketAlerts){
-      const message=`${symbol} достиг уровня ${a.price}. Текущая цена ${price}.`;
-      const n=createNotification(db,{category:'market',eventType:'alert.triggered',severity:'info',title:`${symbol} · уровень достигнут`,message,symbol,actionUrl:`/?symbol=${encodeURIComponent(symbol)}`,payload:{alertId:a.id,level:a.price,price,sourceType:a.sourceType}});
+      const title=settings.language==='uk'?`${symbol} · рівень досягнуто`:settings.language==='ru'?`${symbol} · уровень достигнут`:`${symbol} · level reached`;
+      const message=settings.language==='uk'?`${symbol} досяг рівня ${a.price}. Поточна ціна ${price}.`:settings.language==='ru'?`${symbol} достиг уровня ${a.price}. Текущая цена ${price}.`:`${symbol} reached level ${a.price}. Current price ${price}.`;
+      const n=createNotification(db,{category:'market',eventType:'alert.triggered',severity:'info',title,message,symbol,actionUrl:`/?symbol=${encodeURIComponent(symbol)}`,payload:{alertId:a.id,level:a.price,price,sourceType:a.sourceType}});
       const link=publicUrl?`\n\n${publicUrl}/?symbol=${encodeURIComponent(symbol)}`:'';
-      void deliverTelegram(n,`🔔 <b>${symbol}</b>\n\nУровень достигнут: <b>${a.price}</b>\nЦена: ${price}${link}`,a.telegramEnabled&&settings.telegramMarket);
+      const telegramText=settings.language==='uk'?`🔔 <b>${symbol}</b>\n\nРівень досягнуто: <b>${a.price}</b>\nЦіна: ${price}${link}`:settings.language==='ru'?`🔔 <b>${symbol}</b>\n\nУровень достигнут: <b>${a.price}</b>\nЦена: ${price}${link}`:`🔔 <b>${symbol}</b>\n\nLevel reached: <b>${a.price}</b>\nPrice: ${price}${link}`;
+      void deliverTelegram(n,telegramText,a.telegramEnabled&&settings.telegramMarket);
     }
   }
 }
@@ -120,20 +126,23 @@ refreshSubscriptions();setInterval(refreshSubscriptions,5000);
 function tradingNotification(id:number,name:string,x:any){
   const status=String(x.orderStatus||'');
   const settings=getNotificationSettings(db);
+  const language=settings.language;
   const symbol=String(x.symbol||'');const orderId=String(x.orderId||'');const cum=String(x.cumExecQty||'0');
   let enabled=false;let title='';let severity='info';
-  if(status==='New'){enabled=settings.tradingAccepted;title='Ордер принят';}
-  else if(status==='Untriggered'){enabled=settings.tradingAccepted;title='Условный ордер принят';}
-  else if(status==='Filled'){enabled=settings.tradingFilled;const stopType=String(x.stopOrderType||x.createType||'').toLowerCase();title=stopType.includes('stoploss')?'Stop Loss исполнен':stopType.includes('takeprofit')?'Take Profit исполнен':x.reduceOnly?'Закрытие позиции исполнено':'Ордер исполнен';}
-  else if(status==='PartiallyFilled'){enabled=settings.tradingPartial;title='Частичное исполнение';}
-  else if(['Cancelled','Deactivated','PartiallyFilledCanceled'].includes(status)){enabled=settings.tradingCancelled;title='Ордер отменён';}
-  else if(status==='Rejected'){enabled=settings.tradingRejected;title='Ордер отклонён';severity='warning';}
+  if(status==='New'){enabled=settings.tradingAccepted;title=language==='uk'?'Ордер прийнято':language==='ru'?'Ордер принят':'Order accepted';}
+  else if(status==='Untriggered'){enabled=settings.tradingAccepted;title=language==='uk'?'Умовний ордер прийнято':language==='ru'?'Условный ордер принят':'Conditional order accepted';}
+  else if(status==='Filled'){enabled=settings.tradingFilled;const stopType=String(x.stopOrderType||x.createType||'').toLowerCase();title=stopType.includes('stoploss')?(language==='uk'?'Stop Loss виконано':language==='ru'?'Stop Loss исполнен':'Stop Loss filled'):stopType.includes('takeprofit')?(language==='uk'?'Take Profit виконано':language==='ru'?'Take Profit исполнен':'Take Profit filled'):x.reduceOnly?(language==='uk'?'Закриття позиції виконано':language==='ru'?'Закрытие позиции исполнено':'Position close filled'):(language==='uk'?'Ордер виконано':language==='ru'?'Ордер исполнен':'Order filled');}
+  else if(status==='PartiallyFilled'){enabled=settings.tradingPartial;title=language==='uk'?'Часткове виконання':language==='ru'?'Частичное исполнение':'Partial fill';}
+  else if(['Cancelled','Deactivated','PartiallyFilledCanceled'].includes(status)){enabled=settings.tradingCancelled;title=language==='uk'?'Ордер скасовано':language==='ru'?'Ордер отменён':'Order cancelled';}
+  else if(status==='Rejected'){enabled=settings.tradingRejected;title=language==='uk'?'Ордер відхилено':language==='ru'?'Ордер отклонён':'Order rejected';severity='warning';}
   if(!enabled||!title)return;
   const avg=Number(x.avgPrice)||Number(x.price)||0;const qty=Number(x.cumExecQty)||Number(x.qty)||0;
-  const message=`${name} · ${symbol} · ${x.side||''} ${qty}${avg?` @ ${avg}`:''} · ${status}`;
+  const side=language==='uk'?(x.side==='Buy'?'Купівля':x.side==='Sell'?'Продаж':x.side||''):language==='ru'?(x.side==='Buy'?'Покупка':x.side==='Sell'?'Продажа':x.side||''):x.side||'';
+  const message=`${name} · ${symbol} · ${side} ${qty}${avg?` @ ${avg}`:''} · ${status}`;
   const n=createNotification(db,{category:'trading',eventType:`order.${status.toLowerCase()}`,severity,title,message,accountId:id,accountName:name,symbol,actionUrl:'/trade',payload:x,dedupeKey:`bybit:order:${id}:${orderId}:${status}:${cum}`});
   const icon=severity==='warning'?'⚠️':(['New','Untriggered'].includes(status)?'🟦':'✅');
-  void deliverTelegram(n,`${icon} <b>${title}</b>\n\nBybit · ${name}\n<b>${symbol}</b> ${x.side||''}\n${qty?`Qty: ${qty}\n`:''}${avg?`Цена: ${avg}\n`:''}Статус: ${status}`,settings.telegramTrading);
+  const qtyLabel=language==='uk'?'К-сть':language==='ru'?'Кол-во':'Qty';const priceLabel=language==='uk'?'Ціна':language==='ru'?'Цена':'Price';const statusLabel=language==='uk'?'Статус':language==='ru'?'Статус':'Status';
+  void deliverTelegram(n,`${icon} <b>${title}</b>\n\nBybit · ${name}\n<b>${symbol}</b> ${side}\n${qty?`${qtyLabel}: ${qty}\n`:''}${avg?`${priceLabel}: ${avg}\n`:''}${statusLabel}: ${status}`,settings.telegramTrading);
 }
 
 for(const account of listExchangeAccounts(db,{exchange:'bybit',enabledOnly:true}).filter(a=>a.configured)){

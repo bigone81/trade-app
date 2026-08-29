@@ -20,6 +20,7 @@ import type {
 } from '@trade/shared';
 import RiskRewardOverlay from './RiskRewardOverlay';
 import { readChartView, resolvedTheme, usePreferences, writeChartView } from '../preferences';
+import { useI18n } from '../i18n';
 
 interface Props {
   symbol: string;
@@ -155,6 +156,7 @@ function logicalAtTime(candles: Candle[], time: number, fallbackStep: number) {
 
 export default function TradingChart(p: Props) {
   const { preferences } = usePreferences();
+  const { t, language } = useI18n();
   const theme = resolvedTheme(preferences.theme);
   const futureBars = preferences.chart.futureBars || DEFAULT_FUTURE_BARS;
   const hostRef = useRef<HTMLDivElement>(null);
@@ -616,7 +618,7 @@ export default function TradingChart(p: Props) {
         lineWidth: preferences.manualLevel.width,
         lineStyle: toLineStyle(preferences.manualLevel.style),
         axisLabelVisible: preferences.manualLevel.showPriceLabel,
-        title: level.label || 'Manual',
+        title: level.label || t('Manual'),
       });
       lines.current.push(line);
       manualLineMap.current.set(level.id, line);
@@ -642,7 +644,8 @@ export default function TradingChart(p: Props) {
     const styleFor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.orderStyle : kind === 'position' ? overlay.positionStyle : kind === 'sl' ? overlay.stopStyle : kind === 'tp' ? overlay.targetStyle : 'dotted';
     const titleFor = (line: TradingOverlayLine) => {
       if (overlay.labelMode === 'price') return '';
-      const kind = line.kind === 'order' ? `${line.side === 'Buy' ? 'BUY' : line.side === 'Sell' ? 'SELL' : ''} ${line.orderType || 'ORDER'}`.trim() : line.kind === 'position' ? 'POSITION' : line.kind.toUpperCase();
+      const orderSide=line.side==='Buy'?(language==='uk'?'КУПІВЛЯ':language==='ru'?'ПОКУПКА':'BUY'):line.side==='Sell'?(language==='uk'?'ПРОДАЖ':language==='ru'?'ПРОДАЖА':'SELL'):'';
+      const kind = line.kind === 'order' ? `${orderSide} ${line.orderType || (language==='uk'?'ОРДЕР':language==='ru'?'ОРДЕР':'ORDER')}`.trim() : line.kind === 'position' ? (language==='uk'?'ПОЗИЦІЯ':language==='ru'?'ПОЗИЦИЯ':'POSITION') : line.kind.toUpperCase();
       const account = overlay.showAccountName ? ` · ${line.accountName}` : '';
       if (overlay.labelMode === 'compact') return `${kind}${account}`;
       const side = line.kind !== 'order' && line.side ? ` · ${line.side === 'Buy' ? 'LONG' : 'SHORT'}` : '';
@@ -663,7 +666,7 @@ export default function TradingChart(p: Props) {
       lines.current.push(line);
       tradingLineMap.current.set(tradingLine.id, line);
     }
-  }, [series, p.autoLevels, p.manualLevels, p.alerts, p.tradingLines, theme, preferences.manualLevel, preferences.tradingOverlays]);
+  }, [series, p.autoLevels, p.manualLevels, p.alerts, p.tradingLines, theme, preferences.manualLevel, preferences.tradingOverlays, language, t]);
 
 
   useEffect(() => {
@@ -1039,9 +1042,9 @@ export default function TradingChart(p: Props) {
           <div className="rr-draft-help">
             Risk/Reward:{' '}
             {rrDraft.entry === undefined
-              ? '1/2 — click Entry'
-              : `2/2 — click Stop · Target ${preferences.riskReward.defaultRatio}R is automatic`}
-            <span>Esc = cancel</span>
+              ? (language==='uk'?'1/2 — клік Entry':language==='ru'?'1/2 — клик Entry':'1/2 — click Entry')
+              : (language==='uk'?`2/2 — клік Stop · Target ${preferences.riskReward.defaultRatio}R автоматично`:language==='ru'?`2/2 — клик Stop · Target ${preferences.riskReward.defaultRatio}R автоматически`:`2/2 — click Stop · Target ${preferences.riskReward.defaultRatio}R is automatic`)}
+            <span>{language==='uk'?'Esc = скасувати':language==='ru'?'Esc = отменить':'Esc = cancel'}</span>
           </div>
 
           {entryY !== null && <div className="rr-draft-line entry" style={{ top: entryY }} />}

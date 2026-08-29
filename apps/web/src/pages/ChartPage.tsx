@@ -25,6 +25,7 @@ import CalculatorDrawer from '../components/CalculatorDrawer';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { buildTradingOverlayLines } from '../tradeGrouping';
 import { usePreferences } from '../preferences';
+import { useI18n } from '../i18n';
 
 interface MarketTicker {
   symbol: string;
@@ -50,6 +51,7 @@ export default function ChartPage() {
   const qc = useQueryClient();
   const ui = useUi();
   const { preferences } = usePreferences();
+  const { t } = useI18n();
   const [tickerSearch, setTickerSearch] = useState('');
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [pendingTradingChange, setPendingTradingChange] = useState<{ line: TradingOverlayLine; price: number } | null>(null);
@@ -321,7 +323,7 @@ export default function ChartPage() {
       onClick={() => ui.setTool(name)}
     >
       <Icon size={15} />
-      {label}
+      {t(label)}
     </button>
   );
 
@@ -347,7 +349,7 @@ export default function ChartPage() {
       <div className="page-head">
         <div>
           <h1>{ui.symbol}</h1>
-          <p>Market scanner · bars · automatic levels · persistent drawings</p>
+          <p>{t('Market scanner · bars · automatic levels · persistent drawings')}</p>
         </div>
 
         <div className="top-controls">
@@ -374,7 +376,7 @@ export default function ChartPage() {
             onClick={() => ui.setDrawerOpen(!ui.drawerOpen)}
           >
             <Calculator size={15} />
-            Calculator
+            {t('Calculator')}
           </button>
         </div>
       </div>
@@ -387,12 +389,12 @@ export default function ChartPage() {
 
         <span style={{ marginLeft: 'auto' }} className="muted">
           {ui.tool === 'level'
-            ? 'Click repeatedly to save levels · Esc to finish'
+            ? t('Click repeatedly to save levels · Esc to finish')
             : ui.tool === 'alert'
-              ? 'Click repeatedly to create alerts · Esc to finish'
+              ? t('Click repeatedly to create alerts · Esc to finish')
               : ui.tool === 'risk-reward'
-                ? 'Click Entry → Stop · Target is created automatically'
-                : 'Click a level to send its price to Calculator'}
+                ? t('Click Entry → Stop · Target is created automatically')
+                : t('Click a level to send its price to Calculator')}
         </span>
       </div>
 
@@ -446,10 +448,10 @@ export default function ChartPage() {
             <div className="market-price">{currentPrice ? num(currentPrice, 8) : '—'}</div>
             <div className="market-meta">
               <span>24h {formatTurnover(selectedTicker?.turnover24h || 0)}</span>
-              <span>Visible levels {visibleAuto.length}/{allAuto.length}</span>
+              <span>{t('Visible levels')} {visibleAuto.length}/{allAuto.length}</span>
             </div>
             <div className="market-meta">
-              <span>Mirror {mirrorCount}</span>
+              <span>{t('Mirror')} {mirrorCount}</span>
               <span>S/R {regularCount}</span>
             </div>
           </div>
@@ -457,7 +459,7 @@ export default function ChartPage() {
           <div className="market-controls">
             <div className="range-field">
               <div className="range-head">
-                <label>Min 24h turnover</label>
+                <label>{t('Min 24h turnover')}</label>
                 <strong>{ui.minTurnoverMillions}M</strong>
               </div>
               <input
@@ -474,7 +476,7 @@ export default function ChartPage() {
 
             <div className="range-field">
               <div className="range-head">
-                <label>Show auto levels</label>
+                <label>{t('Show auto levels')}</label>
                 <strong>±{ui.levelTolerancePercent}%</strong>
               </div>
               <input
@@ -493,14 +495,14 @@ export default function ChartPage() {
               className="input ticker-search"
               value={tickerSearch}
               onChange={(event) => setTickerSearch(event.target.value)}
-              placeholder="Search ticker…"
+              placeholder={t('Search ticker…')}
             />
           </div>
 
           <div className="ticker-list-head">
-            <span>Ticker</span>
+            <span>{t('Ticker')}</span>
             <span>24h</span>
-            <span>Turnover</span>
+            <span>{t('Turnover')}</span>
           </div>
 
           <div className="ticker-list-modern">
@@ -525,7 +527,7 @@ export default function ChartPage() {
             })}
 
             {!filteredTickers.length && (
-              <div className="empty ticker-empty">No tickers match this filter.</div>
+              <div className="empty ticker-empty">{t('No tickers match this filter.')}</div>
             )}
           </div>
         </aside>
@@ -548,9 +550,9 @@ export default function ChartPage() {
 
       <ConfirmDialog
         open={Boolean(pendingTradingChange)}
-        title="Modify exchange order"
+        title={t('Modify exchange order')}
         danger
-        confirmLabel="Send change"
+        confirmLabel={t('Send change')}
         onClose={() => setPendingTradingChange(null)}
         onConfirm={() => { if (pendingTradingChange) updateTradingLine.mutate(pendingTradingChange); }}
         body={pendingTradingChange ? <>

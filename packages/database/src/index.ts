@@ -292,6 +292,7 @@ export function appendSystemEvent(db:SqliteDb,event:{severity?:string;eventType:
 }
 
 export type NotificationSettings = {
+  language:'en'|'uk'|'ru';
   marketAlerts:boolean;
   marketPreAlerts:boolean;
   tradingAccepted:boolean;
@@ -308,6 +309,7 @@ export type NotificationSettings = {
 };
 
 export const defaultNotificationSettings:NotificationSettings={
+  language:'en',
   marketAlerts:true,
   marketPreAlerts:true,
   tradingAccepted:true,
@@ -336,6 +338,7 @@ export function getNotificationSettings(db:SqliteDb):NotificationSettings{
 export function updateNotificationSettings(db:SqliteDb,patch:Partial<NotificationSettings>):NotificationSettings{
   const current=getNotificationSettings(db);
   const next={...current,...patch};
+  next.language=['en','uk','ru'].includes(String(next.language))?next.language:'en';
   next.systemOfflineSeconds=Math.max(10,Math.min(600,Math.round(Number(next.systemOfflineSeconds)||60)));
   db.prepare(`INSERT INTO notification_settings(id,settings_json,updated_at) VALUES(1,?,CURRENT_TIMESTAMP)
     ON CONFLICT(id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=CURRENT_TIMESTAMP`).run(JSON.stringify(next));
