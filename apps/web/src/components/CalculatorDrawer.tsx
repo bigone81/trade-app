@@ -4,6 +4,7 @@ import { ChevronRight, X } from 'lucide-react';
 import { calculateRiskReward, calculateTrade } from '@trade/domain';
 import type { AccountPublic, AutoLevel, ManualLevel, RiskReward } from '@trade/shared';
 import { api, json, money, num } from '../api';
+import { effectiveRiskPercent, usePreferences } from '../preferences';
 import ConfirmDialog from './ConfirmDialog';
 
 interface Props {
@@ -35,8 +36,9 @@ export default function CalculatorDrawer({
   liveEnabled,
   onUpdateRiskReward,
 }: Props) {
-  const [accountId, setAccountId] = useState(2);
-  const [risk, setRisk] = useState(0.1);
+  const { preferences } = usePreferences();
+  const [accountId, setAccountId] = useState(() => preferences.defaultAccountId || 2);
+  const [risk, setRisk] = useState(() => effectiveRiskPercent(preferences, preferences.defaultAccountId || 2));
   const [mode, setMode] = useState<'stop' | 'limit' | 'market'>('limit');
   const [stopMode, setStopMode] = useState<'atr' | 'technical'>('technical');
   const [side, setSide] = useState<'Buy' | 'Sell'>('Buy');
@@ -53,6 +55,20 @@ export default function CalculatorDrawer({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState('');
   const initializedSymbolRef = useRef('');
+  const lastDefaultAccountRef = useRef(accountId);
+
+  useEffect(() => {
+    if (!accounts.some((a) => a.id === accountId) && accounts.length) {
+      setAccountId(accounts[0]!.id);
+    }
+  }, [accounts, accountId]);
+
+  useEffect(() => {
+    if (lastDefaultAccountRef.current !== accountId) {
+      lastDefaultAccountRef.current = accountId;
+      setRisk(effectiveRiskPercent(preferences, accountId));
+    }
+  }, [accountId, preferences]);
 
   const applyPriceLevel = (value: number) => {
     if (!Number.isFinite(value) || value <= 0) return;

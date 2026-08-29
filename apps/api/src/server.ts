@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, createAlert, createManualLevel, createRiskReward, deleteAlert, deleteManualLevel, deleteRiskReward, listAlerts, listJournal, listManualLevels, listRiskRewards, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateRiskReward } from '@trade/database';
+import { appendSystemEvent, createAlert, createManualLevel, createRiskReward, deleteAlert, deleteManualLevel, deleteRiskReward, listAlerts, listJournal, listManualLevels, listRiskRewards, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateRiskReward, updateJournalOrder } from '@trade/database';
 import { accounts, appConfig, publicAccounts } from './config.js';
 import { getAccountBalance, getCandles, getExecutions, getOrders, getPositions, getPrivateClient, getTickers, normalizePrice, normalizeQty } from './bybit.js';
 
@@ -46,6 +46,7 @@ app.patch('/api/alerts/:id/active',async(req,reply)=>{const id=z.coerce.number()
 app.delete('/api/alerts/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);return deleteAlert(db,id)?{ok:true}:reply.code(404).send({error:'Not found'});});
 
 app.get('/api/journal',async(req)=>{const q=z.object({accountId:z.coerce.number().int().min(1).max(5).optional(),symbol:z.string().optional(),limit:z.coerce.number().int().optional()}).parse(req.query);return listJournal(db,q);});
+app.patch('/api/journal/:id',async(req,reply)=>{const id=z.coerce.number().int().positive().parse((req.params as any).id);const b=z.object({rr:z.number().min(-100).max(100).optional(),style:z.number().int().min(0).max(99).optional(),status:z.number().int().min(0).max(99).optional(),note:z.string().max(20000).nullable().optional(),setup:z.string().max(200).nullable().optional(),tags:z.array(z.string().max(80)).max(30).optional(),executionQuality:z.string().max(80).nullable().optional(),exitPrice:z.number().min(0).nullable().optional(),pnl:z.number().nullable().optional(),fees:z.number().min(0).nullable().optional()}).parse(req.body);const row=updateJournalOrder(db,id,b);if(!row)return reply.code(404).send({error:'Not found'});return row;});
 app.get('/api/system/events',async(req)=>{const q=z.object({limit:z.coerce.number().int().min(1).max(200).default(50)}).parse(req.query);return db.prepare('SELECT * FROM system_events ORDER BY id DESC LIMIT ?').all(q.limit);});
 
 async function accountIds(value:unknown){const q=z.coerce.number().int().min(1).max(5).optional().parse(value);return q?[q]:accounts.filter(a=>a.configured).map(a=>a.id);}

@@ -18,6 +18,7 @@ import type {
   RiskReward,
 } from '@trade/shared';
 import RiskRewardOverlay from './RiskRewardOverlay';
+import { readChartView, resolvedTheme, usePreferences, writeChartView } from '../preferences';
 
 interface Props {
   symbol: string;
@@ -55,7 +56,15 @@ type PriceDrag = {
 };
 type WsState = 'connecting' | 'live' | 'reconnecting' | 'offline';
 
-const FUTURE_BARS = 24;
+const DEFAULT_FUTURE_BARS = 24;
+
+const rgba = (hex: string, opacity: number) => {
+  const clean = hex.replace('#', '');
+  const value = clean.length === 3 ? clean.split('').map((x) => x + x).join('') : clean;
+  const n = Number.parseInt(value, 16);
+  if (!Number.isFinite(n)) return hex;
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${Math.max(0, Math.min(1, opacity))})`;
+};
 
 const timeframeSeconds = (timeframe: string) => {
   if (timeframe === 'D') return 86_400;
@@ -113,6 +122,9 @@ function logicalAtTime(candles: Candle[], time: number, fallbackStep: number) {
 }
 
 export default function TradingChart(p: Props) {
+  const { preferences } = usePreferences();
+  const theme = resolvedTheme(preferences.theme);
+  const futureBars = preferences.chart.futureBars || DEFAULT_FUTURE_BARS;
   const hostRef = useRef<HTMLDivElement>(null);
   const [chart, setChart] = useState<IChartApi | null>(null);
   const [series, setSeries] = useState<ISeriesApi<'Bar'> | null>(null);
@@ -139,6 +151,8 @@ export default function TradingChart(p: Props) {
   const followLiveRef = useRef(true);
   const latestLogicalRef = useRef(Math.max(0, p.candles.length - 1));
   const lastPriceReportAtRef = useRef(0);
+  const restoringViewRef = useRef(false);
+  const saveViewTimerRef = useRef<number | null>(null);
 
   toolRef.current = p.tool;
   timeframeRef.current = p.timeframe;
@@ -164,21 +178,21 @@ export default function TradingChart(p: Props) {
     const c = createChart(hostRef.current, {
       autoSize: true,
       layout: {
-        background: { type: ColorType.Solid, color: '#0a0f16' },
-        textColor: '#6f7f94',
+        background: { type: ColorType.Solid, color: theme === 'light' ? '#ffffff' : '#0a0f16' },
+        textColor: theme === 'light' ? '#526071' : '#6f7f94',
       },
-      grid: { vertLines: { color: '#111a25' }, horzLines: { color: '#111a25' } },
-      rightPriceScale: { borderColor: '#202b3a' },
+      grid: { vertLines: { color: preferences.chart.showGrid ? (theme === 'light' ? '#e8edf3' : '#111a25') : 'transparent' }, horzLines: { color: preferences.chart.showGrid ? (theme === 'light' ? '#e8edf3' : '#111a25') : 'transparent' } },
+      rightPriceScale: { borderColor: theme === 'light' ? '#d7dee7' : '#202b3a' },
       timeScale: {
-        borderColor: '#202b3a',
+        borderColor: theme === 'light' ? '#d7dee7' : '#202b3a',
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: FUTURE_BARS,
+        rightOffset: futureBars,
         shiftVisibleRangeOnNewBar: false,
       },
       crosshair: {
-        vertLine: { color: '#60708755' },
-        horzLine: { color: '#60708755' },
+        vertLine: { color: theme === 'light' ? '#52607144' : '#60708755' },
+        horzLine: { color: theme === 'light' ? '#52607144' : '#60708755' },
       },
     });
 
@@ -282,6 +296,22 @@ export default function TradingChart(p: Props) {
   }, []);
 
   useEffect(() => {
+    if (!chart || !series) return;
+    const light = theme === 'light';
+    chart.applyOptions({
+      layout: { background: { type: ColorType.Solid, color: light ? '#ffffff' : '#0a0f16' }, textColor: light ? '#526071' : '#6f7f94' },
+      grid: {
+        vertLines: { color: preferences.chart.showGrid ? (light ? '#e8edf3' : '#111a25') : 'transparent' },
+        horzLines: { color: preferences.chart.showGrid ? (light ? '#e8edf3' : '#111a25') : 'transparent' },
+      },
+      rightPriceScale: { borderColor: light ? '#d7dee7' : '#202b3a' },
+      timeScale: { borderColor: light ? '#d7dee7' : '#202b3a', rightOffset: futureBars },
+      crosshair: { vertLine: { color: light ? '#52607144' : '#60708755' }, horzLine: { color: light ? '#52607144' : '#60708755' } },
+    });
+    series.applyOptions({ priceLineVisible: preferences.chart.showCurrentPriceLine });
+  }, [chart, series, theme, preferences.chart.showGrid, preferences.chart.showCurrentPriceLine, futureBars]);
+
+  useEffect(() => {
     if (!chart || !hostRef.current) return;
     const refresh = () => {
       setOverlayVersion((value) => value + 1);
@@ -290,6 +320,16 @@ export default function TradingChart(p: Props) {
       const atEdge = range.to >= latestLogicalRef.current - 0.5;
       followLiveRef.current = atEdge;
       setIsAtLiveEdge(atEdge);
+      if (!restoringViewRef.current) {
+        if (saveViewTimerRef.current) window.clearTimeout(saveViewTimerRef.current);
+        saveViewTimerRef.current = window.setTimeout(() => {
+          const step = timeframeSeconds(p.timeframe);
+          writeChartView(p.symbol, p.timeframe, {
+            fromTime: candleTimeAtLogical(timelineCandlesRef.current, range.from, step),
+            toTime: candleTimeAtLogical(timelineCandlesRef.current, range.to, step),
+          });
+        }, 250);
+      }
     };
     chart.timeScale().subscribeVisibleTimeRangeChange(refresh);
     chart.timeScale().subscribeVisibleLogicalRangeChange(refresh);
@@ -300,7 +340,7 @@ export default function TradingChart(p: Props) {
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(refresh);
       observer.disconnect();
     };
-  }, [chart]);
+  }, [chart, p.symbol, p.timeframe]);
 
   useEffect(() => {
     if (!series) return;
@@ -347,8 +387,8 @@ export default function TradingChart(p: Props) {
       series.update({ ...bar, time: bar.time as UTCTimestamp });
       reportLivePrice(bar.close, lastPriceReportAtRef.current === 0);
       if (newBar) updateTimelineForNewBar(bar);
-      if (newBar && followLiveRef.current) {
-        chart.timeScale().applyOptions({ rightOffset: FUTURE_BARS });
+      if (newBar && followLiveRef.current && preferences.chart.autoFollowLive) {
+        chart.timeScale().applyOptions({ rightOffset: futureBars });
         chart.timeScale().scrollToRealTime();
       }
     };
@@ -491,12 +531,15 @@ export default function TradingChart(p: Props) {
     }
 
     for (const level of p.manualLevels) {
+      const autoColor = theme === 'light' ? '#1f2937' : '#e5e7eb';
+      const selectedColor = preferences.manualLevel.colorMode === 'auto' ? autoColor : preferences.manualLevel.color;
+      const lineStyle = preferences.manualLevel.style === 'dashed' ? LineStyle.Dashed : preferences.manualLevel.style === 'dotted' ? LineStyle.Dotted : LineStyle.Solid;
       const line = series.createPriceLine({
         price: level.price,
-        color: '#d6dbe4',
-        lineWidth: 1,
-        lineStyle: LineStyle.Solid,
-        axisLabelVisible: true,
+        color: rgba(selectedColor, preferences.manualLevel.opacity),
+        lineWidth: preferences.manualLevel.width,
+        lineStyle,
+        axisLabelVisible: preferences.manualLevel.showPriceLabel,
         title: level.label || 'Manual',
       });
       lines.current.push(line);
@@ -515,15 +558,30 @@ export default function TradingChart(p: Props) {
       lines.current.push(line);
       alertLineMap.current.set(alert.id, line);
     }
-  }, [series, p.autoLevels, p.manualLevels, p.alerts]);
+  }, [series, p.autoLevels, p.manualLevels, p.alerts, theme, preferences.manualLevel]);
 
   useEffect(() => {
     if (!chart || !p.candles.length) return;
-    chart.timeScale().fitContent();
-    chart.timeScale().applyOptions({ rightOffset: FUTURE_BARS });
-    chart.timeScale().scrollToRealTime();
-    followLiveRef.current = true;
-    setIsAtLiveEdge(true);
+    restoringViewRef.current = true;
+    const stored = readChartView(p.symbol, p.timeframe);
+    if (stored) {
+      const step = timeframeSeconds(p.timeframe);
+      const restoredRange = {
+        from: logicalAtTime(p.candles, stored.fromTime, step),
+        to: logicalAtTime(p.candles, stored.toTime, step),
+      };
+      (chart.timeScale() as any).setVisibleLogicalRange(restoredRange);
+      const atEdge = restoredRange.to >= p.candles.length - 1 - 0.5;
+      followLiveRef.current = atEdge;
+      setIsAtLiveEdge(atEdge);
+    } else {
+      chart.timeScale().fitContent();
+      chart.timeScale().applyOptions({ rightOffset: futureBars });
+      chart.timeScale().scrollToRealTime();
+      followLiveRef.current = true;
+      setIsAtLiveEdge(true);
+    }
+    window.setTimeout(() => { restoringViewRef.current = false; }, 100);
   }, [chart, p.symbol, p.timeframe, p.candles.length]);
 
   useEffect(() => {
@@ -644,7 +702,7 @@ export default function TradingChart(p: Props) {
 
   const returnToLive = () => {
     if (!chart) return;
-    chart.timeScale().applyOptions({ rightOffset: FUTURE_BARS });
+    chart.timeScale().applyOptions({ rightOffset: futureBars });
     chart.timeScale().scrollToRealTime();
     followLiveRef.current = true;
     setIsAtLiveEdge(true);

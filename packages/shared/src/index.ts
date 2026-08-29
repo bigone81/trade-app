@@ -1,3 +1,8 @@
+export type ExchangeId = 'bybit' | 'binance' | 'okx' | (string & {});
+export type MarketKind = 'linear' | 'inverse' | 'spot' | 'option' | (string & {});
+export interface MarketRef { exchange: ExchangeId; market: MarketKind; symbol: string; }
+export interface ExchangeCapabilities { market:boolean; limit:boolean; stop:boolean; reduceOnly:boolean; hedgeMode:boolean; tpsl:boolean; trailingStop:boolean; privateWebsocket:boolean; }
+
 export type AccountId = 1 | 2 | 3 | 4 | 5;
 export type Side = 'Buy' | 'Sell';
 export type Direction = 'long' | 'short';

@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS journal_orders (
   note TEXT,
   chart_path TEXT,
   raw_json TEXT,
+  exchange TEXT NOT NULL DEFAULT 'bybit',
+  exit_price REAL,
+  pnl REAL,
+  fees REAL,
+  setup TEXT,
+  tags_json TEXT,
+  execution_quality TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_journal_symbol ON journal_orders(symbol);
@@ -103,6 +111,17 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/trade.s
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(schema);
+  const columns = new Set((db.prepare('PRAGMA table_info(journal_orders)').all() as any[]).map((row:any) => String(row.name)));
+  const addColumn = (name:string, definition:string) => { if (!columns.has(name)) db.exec(`ALTER TABLE journal_orders ADD COLUMN ${name} ${definition}`); };
+  addColumn('exchange', "TEXT NOT NULL DEFAULT 'bybit'");
+  addColumn('exit_price', 'REAL');
+  addColumn('pnl', 'REAL');
+  addColumn('fees', 'REAL');
+  addColumn('setup', 'TEXT');
+  addColumn('tags_json', 'TEXT');
+  addColumn('execution_quality', 'TEXT');
+  addColumn('updated_at', 'TEXT');
+  db.exec("UPDATE journal_orders SET updated_at=COALESCE(updated_at,created_at,CURRENT_TIMESTAMP) WHERE updated_at IS NULL");
   return db;
 }
 
@@ -198,4 +217,14 @@ export function listJournal(db:SqliteDb, filters:{accountId?:number;symbol?:stri
   const where=c.length?`WHERE ${c.join(' AND ')}`:'';
   p.push(Math.min(filters.limit??200,1000));
   return db.prepare(`SELECT * FROM journal_orders ${where} ORDER BY occurred_at DESC LIMIT ?`).all(...p);
+}
+
+
+export function updateJournalOrder(db:SqliteDb,id:number,input:{rr?:number;style?:number;status?:number;note?:string|null;setup?:string|null;tags?:string[];executionQuality?:string|null;exitPrice?:number|null;pnl?:number|null;fees?:number|null}){
+  const current:any=db.prepare('SELECT * FROM journal_orders WHERE id=?').get(id);
+  if(!current)return null;
+  const tagsJson=input.tags===undefined?current.tags_json:JSON.stringify(input.tags);
+  db.prepare(`UPDATE journal_orders SET rr=?,style=?,status=?,note=?,setup=?,tags_json=?,execution_quality=?,exit_price=?,pnl=?,fees=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(input.rr??current.rr,input.style??current.style,input.status??current.status,input.note===undefined?current.note:input.note,input.setup===undefined?current.setup:input.setup,tagsJson,input.executionQuality===undefined?current.execution_quality:input.executionQuality,input.exitPrice===undefined?current.exit_price:input.exitPrice,input.pnl===undefined?current.pnl:input.pnl,input.fees===undefined?current.fees:input.fees,id);
+  return db.prepare('SELECT * FROM journal_orders WHERE id=?').get(id);
 }
