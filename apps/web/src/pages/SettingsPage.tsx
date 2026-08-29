@@ -5,7 +5,7 @@ import { api, json } from '../api';
 import { clearChartViews, defaultPreferences, usePreferences } from '../preferences';
 import { useUi } from '../store';
 
-type NotificationSettings={marketAlerts:boolean;marketPreAlerts:boolean;tradingFilled:boolean;tradingPartial:boolean;tradingCancelled:boolean;tradingRejected:boolean;systemOffline:boolean;systemReconnect:boolean;telegramMarket:boolean;telegramTrading:boolean;telegramSystem:boolean;systemOfflineSeconds:number};
+type NotificationSettings={marketAlerts:boolean;marketPreAlerts:boolean;tradingAccepted:boolean;tradingFilled:boolean;tradingPartial:boolean;tradingCancelled:boolean;tradingRejected:boolean;systemOffline:boolean;systemReconnect:boolean;telegramMarket:boolean;telegramTrading:boolean;telegramSystem:boolean;systemOfflineSeconds:number};
 
 export default function SettingsPage() {
   const qc=useQueryClient();
@@ -173,6 +173,7 @@ export default function SettingsPage() {
             <label className="setting-check nested"><input type="checkbox" checked={notificationSettings.data.telegramMarket} onChange={(e)=>patchNotification({telegramMarket:e.target.checked})}/> Send market notifications to Telegram</label>
 
             <div className="settings-subtitle">Trading</div>
+            <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.tradingAccepted} onChange={(e)=>patchNotification({tradingAccepted:e.target.checked})}/> Order accepted / New</label>
             <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.tradingFilled} onChange={(e)=>patchNotification({tradingFilled:e.target.checked})}/> Filled / TP / SL / close</label>
             <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.tradingPartial} onChange={(e)=>patchNotification({tradingPartial:e.target.checked})}/> Partial fill</label>
             <label className="setting-check"><input type="checkbox" checked={notificationSettings.data.tradingCancelled} onChange={(e)=>patchNotification({tradingCancelled:e.target.checked})}/> Cancelled order</label>

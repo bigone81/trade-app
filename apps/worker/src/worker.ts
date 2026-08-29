@@ -119,7 +119,9 @@ function tradingNotification(id:number,name:string,x:any){
   const settings=getNotificationSettings(db);
   const symbol=String(x.symbol||'');const orderId=String(x.orderId||'');const cum=String(x.cumExecQty||'0');
   let enabled=false;let title='';let severity='info';
-  if(status==='Filled'){enabled=settings.tradingFilled;const stopType=String(x.stopOrderType||x.createType||'').toLowerCase();title=stopType.includes('stoploss')?'Stop Loss исполнен':stopType.includes('takeprofit')?'Take Profit исполнен':x.reduceOnly?'Закрытие позиции исполнено':'Ордер исполнен';}
+  if(status==='New'){enabled=settings.tradingAccepted;title='Ордер принят';}
+  else if(status==='Untriggered'){enabled=settings.tradingAccepted;title='Условный ордер принят';}
+  else if(status==='Filled'){enabled=settings.tradingFilled;const stopType=String(x.stopOrderType||x.createType||'').toLowerCase();title=stopType.includes('stoploss')?'Stop Loss исполнен':stopType.includes('takeprofit')?'Take Profit исполнен':x.reduceOnly?'Закрытие позиции исполнено':'Ордер исполнен';}
   else if(status==='PartiallyFilled'){enabled=settings.tradingPartial;title='Частичное исполнение';}
   else if(['Cancelled','Deactivated','PartiallyFilledCanceled'].includes(status)){enabled=settings.tradingCancelled;title='Ордер отменён';}
   else if(status==='Rejected'){enabled=settings.tradingRejected;title='Ордер отклонён';severity='warning';}
@@ -127,7 +129,8 @@ function tradingNotification(id:number,name:string,x:any){
   const avg=Number(x.avgPrice)||Number(x.price)||0;const qty=Number(x.cumExecQty)||Number(x.qty)||0;
   const message=`${name} · ${symbol} · ${x.side||''} ${qty}${avg?` @ ${avg}`:''} · ${status}`;
   const n=createNotification(db,{category:'trading',eventType:`order.${status.toLowerCase()}`,severity,title,message,accountId:id,accountName:name,symbol,actionUrl:'/trade',payload:x,dedupeKey:`bybit:order:${id}:${orderId}:${status}:${cum}`});
-  void deliverTelegram(n,`${severity==='warning'?'⚠️':'✅'} <b>${title}</b>\n\nBybit · ${name}\n<b>${symbol}</b> ${x.side||''}\n${qty?`Qty: ${qty}\n`:''}${avg?`Цена: ${avg}\n`:''}Статус: ${status}`,settings.telegramTrading);
+  const icon=severity==='warning'?'⚠️':(['New','Untriggered'].includes(status)?'🟦':'✅');
+  void deliverTelegram(n,`${icon} <b>${title}</b>\n\nBybit · ${name}\n<b>${symbol}</b> ${x.side||''}\n${qty?`Qty: ${qty}\n`:''}${avg?`Цена: ${avg}\n`:''}Статус: ${status}`,settings.telegramTrading);
 }
 
 for(let id=1;id<=5;id++){

@@ -276,6 +276,7 @@ export function appendSystemEvent(db:SqliteDb,event:{severity?:string;eventType:
 export type NotificationSettings = {
   marketAlerts:boolean;
   marketPreAlerts:boolean;
+  tradingAccepted:boolean;
   tradingFilled:boolean;
   tradingPartial:boolean;
   tradingCancelled:boolean;
@@ -291,6 +292,7 @@ export type NotificationSettings = {
 export const defaultNotificationSettings:NotificationSettings={
   marketAlerts:true,
   marketPreAlerts:true,
+  tradingAccepted:true,
   tradingFilled:true,
   tradingPartial:true,
   tradingCancelled:true,

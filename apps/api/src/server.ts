@@ -111,7 +111,7 @@ app.post('/api/notifications/read-all',async()=>({ok:true,updated:markAllNotific
 app.get('/api/notification-settings',async()=>getNotificationSettings(db));
 app.put('/api/notification-settings',async(req)=>{
   const patch=z.object({
-    marketAlerts:z.boolean().optional(),marketPreAlerts:z.boolean().optional(),tradingFilled:z.boolean().optional(),tradingPartial:z.boolean().optional(),tradingCancelled:z.boolean().optional(),tradingRejected:z.boolean().optional(),
+    marketAlerts:z.boolean().optional(),marketPreAlerts:z.boolean().optional(),tradingAccepted:z.boolean().optional(),tradingFilled:z.boolean().optional(),tradingPartial:z.boolean().optional(),tradingCancelled:z.boolean().optional(),tradingRejected:z.boolean().optional(),
     systemOffline:z.boolean().optional(),systemReconnect:z.boolean().optional(),telegramMarket:z.boolean().optional(),telegramTrading:z.boolean().optional(),telegramSystem:z.boolean().optional(),systemOfflineSeconds:z.number().int().min(10).max(600).optional(),
   }).parse(req.body);
   return updateNotificationSettings(db,patch);
