@@ -106,7 +106,8 @@ export default function ChartPage() {
       ),
     onSuccess: () => {
       invalidate();
-      ui.setTool('select');
+      // Keep Level tool active so several manual levels can be placed with
+      // consecutive single clicks. Select/Escape exits drawing mode.
     },
   });
 
@@ -170,7 +171,8 @@ export default function ChartPage() {
       ),
     onSuccess: () => {
       invalidate();
-      ui.setTool('select');
+      // Keep Alert tool active. The database already supports many independent
+      // alerts per symbol, so each click creates a new bell at its own price.
     },
   });
 
@@ -188,6 +190,16 @@ export default function ChartPage() {
   useEffect(() => {
     setLivePrice(null);
   }, [ui.symbol]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && ui.tool !== 'select') {
+        ui.setTool('select');
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [ui]);
 
   const selectedTicker = useMemo(
     () => tickers.data?.find((ticker) => ticker.symbol === ui.symbol),
@@ -298,9 +310,9 @@ export default function ChartPage() {
 
         <span style={{ marginLeft: 'auto' }} className="muted">
           {ui.tool === 'level'
-            ? 'Click chart to save level'
+            ? 'Click repeatedly to save levels · Esc to finish'
             : ui.tool === 'alert'
-              ? 'Click chart to create Telegram alert'
+              ? 'Click repeatedly to create alerts · Esc to finish'
               : ui.tool === 'risk-reward'
                 ? 'Click Entry → Stop → Target'
                 : 'Click a level to send its price to Calculator'}
