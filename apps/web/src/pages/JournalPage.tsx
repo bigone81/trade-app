@@ -26,7 +26,7 @@ const shotKinds=[['before','Before'],['entry','Entry'],['management','Management
 const kindLabel=(kind:string)=>shotKinds.find(x=>x[0]===kind)?.[1]||kind;
 const styleMap:Record<number,string>={0:'—',1:'Breakout',2:'LP',3:'Rebound'};
 const statusMap:Record<number,string>={0:'New',1:'Filled',2:'Cancelled'};
-const pointTypeMap:Record<number,string>={10:'Stop Limit · ATR',11:'Stop Limit · Technical',20:'Limit · ATR',21:'Limit · Technical',30:'Market · ATR',31:'Market · Technical'};
+const pointTypeMap:Record<number,string>={10:'Stop Limit · ATR SL',11:'Stop Limit · Technical SL',20:'Limit · ATR SL',21:'Limit · Technical SL',30:'Market · ATR SL',31:'Market · Technical SL'};
 const rrOptions=[-1,0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5];
 const FILTER_KEY='trade.journal.filters.v2';
 const defaultFilters:FilterState={account:0,symbol:'',side:'',style:'',status:'',pointType:'',dateFrom:'',dateTo:'',sort:'newest',tab:'trades',page:1};

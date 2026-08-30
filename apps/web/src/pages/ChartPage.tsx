@@ -358,18 +358,23 @@ export default function ChartPage() {
             value={ui.timeframe}
             onChange={(event) => ui.setTimeframe(event.target.value)}
           >
-            {['1', '3', '5', '15', '30', '60', '120', '240', 'D'].map(
-              (value) => (
-                <option key={value} value={value}>
-                  {value === 'D' ? '1D' : `${value}m`}
-                </option>
-              ),
-            )}
+            {[
+              ['1', '1m'],
+              ['3', '3m'],
+              ['5', '5m'],
+              ['15', '15m'],
+              ['30', '30m'],
+              ['60', '1H'],
+              ['240', '4H'],
+              ['D', '1D'],
+              ['W', '1W'],
+            ].map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
           </select>
 
-          <span className="badge">
-            {currentPrice ? num(currentPrice, 8) : '...'}
-          </span>
 
           <button
             className="btn secondary"
@@ -394,7 +399,7 @@ export default function ChartPage() {
               ? t('Click repeatedly to create alerts · Esc to finish')
               : ui.tool === 'risk-reward'
                 ? t('Click Entry → Stop · Target is created automatically')
-                : t('Click a level to send its price to Calculator')}
+                : null}
         </span>
       </div>
 

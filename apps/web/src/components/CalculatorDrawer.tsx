@@ -206,6 +206,18 @@ export default function CalculatorDrawer({
     positionSize: legacy.positionSize,
   };
   const notional = values.positionSize * values.entry;
+  const legacyPointTypeLabel = (() => {
+    const technical = t('Technical SL');
+    const labels: Record<number, string> = {
+      10: 'Stop Limit · ATR SL',
+      11: `Stop Limit · ${technical}`,
+      20: 'Limit · ATR SL',
+      21: `Limit · ${technical}`,
+      30: 'Market · ATR SL',
+      31: `Market · ${technical}`,
+    };
+    return labels[legacy.pointType] || `pointType ${legacy.pointType}`;
+  })();
   const validGeometry = side === 'Buy'
     ? values.stop < values.entry && values.target > values.entry
     : values.stop > values.entry && values.target < values.entry;
@@ -343,7 +355,7 @@ export default function CalculatorDrawer({
           {executionMode === 'limit' && <div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div>}
           {stopMode === 'atr' ? <div className="field"><label>SL % ATR</label><input className="input" type="number" step="0.5" value={stopAtr} onChange={(e) => setStopAtr(Number(e.target.value))} /></div> : <div className="field"><label>{t('Technical SL')}</label><input className="input" type="number" step="any" value={technicalStop || ''} onChange={(e) => setTechnicalStop(Number(e.target.value))} /></div>}
           <div className="field"><label>{t('Target R:R')}</label><input className="input" type="number" step="0.5" min="0.5" value={legacyRr} onChange={(e) => setLegacyRr(Number(e.target.value))} /></div>
-          <div className="muted" style={{ fontSize: 10 }}>{t('Legacy strategy pointType: {value}',{value:legacy.pointType})}</div>
+          <div className="muted" style={{ fontSize: 10 }}>{legacyPointTypeLabel}</div>
         </div>
       )}
 

@@ -101,6 +101,7 @@ const toLineStyle = (style: 'solid' | 'dashed' | 'dotted') => style === 'dashed'
 
 const timeframeSeconds = (timeframe: string) => {
   if (timeframe === 'D') return 86_400;
+  if (timeframe === 'W') return 604_800;
   const minutes = Number(timeframe);
   return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 : 900;
 };
