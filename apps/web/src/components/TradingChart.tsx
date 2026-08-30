@@ -89,6 +89,11 @@ const chartPriceFormat = (tickSize: string | null, fallbackPrice = 0) => {
   return { type: 'price' as const, precision, minMove: 10 ** -precision };
 };
 
+const formatPriceByTick = (price: number, tickSize: string | null) => {
+  const format = chartPriceFormat(tickSize, price);
+  return Number(price).toFixed(format.precision);
+};
+
 const rgba = (hex: string, opacity: number) => {
   const clean = hex.replace('#', '');
   const value = clean.length === 3 ? clean.split('').map((x) => x + x).join('') : clean;
@@ -161,6 +166,8 @@ export default function TradingChart(p: Props) {
   const theme = resolvedTheme(preferences.theme);
   const futureBars = preferences.chart.futureBars || DEFAULT_FUTURE_BARS;
   const hostRef = useRef<HTMLDivElement>(null);
+  const crosshairBarInfoRef = useRef<HTMLDivElement>(null);
+  const tickSizeRef = useRef<string | null>(p.tickSize);
   const [chart, setChart] = useState<IChartApi | null>(null);
   const [series, setSeries] = useState<ISeriesApi<'Bar'> | null>(null);
   const [timelineCandles, setTimelineCandles] = useState<Candle[]>(p.candles);
@@ -214,6 +221,8 @@ export default function TradingChart(p: Props) {
     lastLiveCandleRef.current = next.at(-1) || null;
     latestLogicalRef.current = Math.max(0, next.length - 1);
   }, [p.candles, p.symbol, p.timeframe]);
+
+  useEffect(() => { tickSizeRef.current = p.tickSize; }, [p.tickSize]);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -337,6 +346,27 @@ export default function TradingChart(p: Props) {
     };
 
     const crosshair = (param: any) => {
+      const info = crosshairBarInfoRef.current;
+      const bar = param?.seriesData?.get?.(s) as { low?: number; high?: number; close?: number } | undefined;
+      const pointX = Number(param?.point?.x);
+
+      if (info && bar && Number.isFinite(bar.low) && Number.isFinite(bar.high) && Number.isFinite(pointX)) {
+        const low = Number(bar.low);
+        const high = Number(bar.high);
+        info.textContent = `Low ${formatPriceByTick(low, tickSizeRef.current)}   High ${formatPriceByTick(high, tickSizeRef.current)}`;
+        info.style.display = 'block';
+        const hostWidth = hostRef.current?.clientWidth || 0;
+        const width = info.offsetWidth || 180;
+        const gapAfterTimeLabel = 52;
+        const rightSide = pointX + gapAfterTimeLabel;
+        const left = rightSide + width <= hostWidth - 6
+          ? rightSide
+          : Math.max(6, pointX - gapAfterTimeLabel - width);
+        info.style.left = `${left}px`;
+      } else if (info) {
+        info.style.display = 'none';
+      }
+
       if (toolRef.current !== 'risk-reward' || rrDraftRef.current.entry === undefined) {
         setRrHover(null);
         return;
@@ -887,6 +917,7 @@ export default function TradingChart(p: Props) {
   return (
     <div className={priceDrag || tradingDrag ? 'chart-card drawing-dragging' : 'chart-card'}>
       <div ref={hostRef} className="chart-host" />
+      <div ref={crosshairBarInfoRef} className="chart-crosshair-bar-info" aria-hidden="true" />
 
       <button
         type="button"
