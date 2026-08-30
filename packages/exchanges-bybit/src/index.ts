@@ -61,6 +61,14 @@ export class BybitAdapter {
     const res=await this.publicClient.getTickers({category:'linear'});if(res.retCode!==0)throw new Error(res.retMsg||'Bybit ticker error');
     return res.result.list.map((x:any)=>({symbol:x.symbol,lastPrice:num(x.lastPrice),price24hPcnt:num(x.price24hPcnt),turnover24h:num(x.turnover24h)}));
   }
+  async getLastPrice(symbol:string){
+    const key=symbol.toUpperCase();
+    const res=await this.publicClient.getTickers({category:'linear',symbol:key} as any);
+    if(res.retCode!==0)throw new Error(res.retMsg||'Bybit ticker error');
+    const x=(res.result.list as any[])?.[0];const price=num(x?.lastPrice);
+    if(!x||price<=0)throw new Error(`Ticker ${key} not found`);
+    return price;
+  }
   async getAccountBalance(accountId:AccountId){
     const a=this.getAccount(accountId),c=this.getPrivateClient(accountId);const res=await c.getWalletBalance({accountType:'UNIFIED'} as any);
     if(res.retCode!==0)throw new Error(res.retMsg||'Wallet balance error');const item=(res.result.list as any[])?.[0]||{};

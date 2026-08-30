@@ -41,7 +41,8 @@ export default function CalculatorDrawer({
   const { t, language } = useI18n();
   const [accountId, setAccountId] = useState(() => preferences.defaultAccountId || accounts[0]?.id || 0);
   const [risk, setRisk] = useState(() => effectiveRiskPercent(preferences, preferences.defaultAccountId || accounts[0]?.id || 0));
-  const [mode, setMode] = useState<'stop' | 'limit' | 'market'>('limit');
+  type OrderMode = 'auto' | 'limit' | 'stop_market' | 'stop_limit' | 'market';
+  const [mode, setMode] = useState<OrderMode>('auto');
   const [stopMode, setStopMode] = useState<'atr' | 'technical'>('technical');
   const [side, setSide] = useState<'Buy' | 'Sell'>('Buy');
   const [entry, setEntry] = useState(currentPrice);
@@ -125,6 +126,24 @@ export default function CalculatorDrawer({
   });
   const atr = atrQuery.data?.atr || 0;
 
+  const autoDecisionPrice = selected
+    ? entry
+    : priceLevel + (side === 'Buy' ? 1 : -1) * atr * slipAtr * 0.01;
+  const autoExecutionMode = useMemo<'limit' | 'stop_market' | 'market'>(() => {
+    if (!Number.isFinite(autoDecisionPrice) || autoDecisionPrice <= 0 || !Number.isFinite(currentPrice) || currentPrice <= 0) return 'limit';
+    const epsilon = Math.max(Math.abs(currentPrice) * 1e-10, 1e-12);
+    if (Math.abs(autoDecisionPrice - currentPrice) <= epsilon) return 'market';
+    if (side === 'Buy') return autoDecisionPrice > currentPrice ? 'stop_market' : 'limit';
+    return autoDecisionPrice < currentPrice ? 'stop_market' : 'limit';
+  }, [autoDecisionPrice, currentPrice, side]);
+  const executionMode: Exclude<OrderMode, 'auto'> = mode === 'auto' ? autoExecutionMode : mode;
+  const strategyMode: 'stop' | 'limit' | 'market' = executionMode === 'market' ? 'market' : executionMode === 'limit' ? 'limit' : 'stop';
+  const isStopExecution = executionMode === 'stop_market' || executionMode === 'stop_limit';
+  const usesLimitPrice = executionMode === 'limit' || executionMode === 'stop_limit';
+  const manualCrossesMarket = mode === 'limit' && autoExecutionMode === 'stop_market';
+  const manualStopWrongSide = (mode === 'stop_market' || mode === 'stop_limit') && autoExecutionMode === 'limit';
+  const executionModeLabel = executionMode === 'stop_market' ? t('Stop Market') : executionMode === 'stop_limit' ? t('Stop Limit') : executionMode === 'market' ? t('Market') : t('Limit');
+
   const calculatorLevels = useMemo(() => {
     const rows = [
       ...manualLevels.map((level) => ({
@@ -153,7 +172,7 @@ export default function CalculatorDrawer({
   }, [manualLevels, autoLevels, currentPrice, priceLevel, t]);
 
   const legacy = useMemo(() => calculateTrade({
-    mode,
+    mode: strategyMode,
     stopMode,
     side,
     balance,
@@ -162,18 +181,18 @@ export default function CalculatorDrawer({
     priceLevel: priceLevel || currentPrice,
     currentPrice,
     triggerAtrPercent: triggerAtr,
-    slipAtrPercent: mode === 'market' ? 0 : slipAtr,
+    slipAtrPercent: executionMode === 'market' ? 0 : slipAtr,
     stopAtrPercent: stopAtr,
     technicalStop,
     rr: legacyRr,
-  }), [mode, stopMode, side, balance, risk, atr, priceLevel, currentPrice, triggerAtr, slipAtr, stopAtr, technicalStop, legacyRr]);
+  }), [strategyMode, executionMode, stopMode, side, balance, risk, atr, priceLevel, currentPrice, triggerAtr, slipAtr, stopAtr, technicalStop, legacyRr]);
 
   const drawingRr = calculateRiskReward(entry, stop, target);
   const values = selected ? {
     entry,
     stop,
     target,
-    trigger: mode === 'stop' ? trigger : 0,
+    trigger: isStopExecution ? (mode === 'auto' ? entry : trigger) : 0,
     rr: drawingRr.ratio,
     riskAmount: balance * risk / 100,
     positionSize: drawingRr.risk > 0 ? (balance * risk / 100) / drawingRr.risk : 0,
@@ -196,10 +215,13 @@ export default function CalculatorDrawer({
       accountId,
       symbol,
       side,
-      orderType: mode === 'market' ? 'Market' : 'Limit',
+      orderType: executionMode === 'market' || executionMode === 'stop_market' ? 'Market' : 'Limit',
+      executionMode,
+      autoMode: mode === 'auto',
+      autoReferencePrice: Number(autoDecisionPrice) || undefined,
       qty: values.positionSize,
-      price: mode === 'market' ? undefined : values.entry,
-      triggerPrice: mode === 'stop' ? values.trigger : undefined,
+      price: usesLimitPrice ? values.entry : undefined,
+      triggerPrice: isStopExecution ? values.trigger : undefined,
       stopLoss: values.stop,
       takeProfit: values.target,
       pointType: selected ? undefined : legacy.pointType,
@@ -214,7 +236,10 @@ export default function CalculatorDrawer({
   });
 
   const changeDrawing = (kind: 'entry' | 'stop' | 'target', value: number) => {
-    if (kind === 'entry') setEntry(value);
+    if (kind === 'entry') {
+      setEntry(value);
+      if (selected && mode === 'auto') setTrigger(value);
+    }
     if (kind === 'stop') setStop(value);
     if (kind === 'target') setTarget(value);
     if (selected) {
@@ -254,12 +279,28 @@ export default function CalculatorDrawer({
 
       <div className="field-grid">
         <div className="field"><label>{t('Side')}</label><select className="select" value={side} onChange={(e) => setSide(e.target.value as any)}><option value="Buy">{t('Buy')}</option><option value="Sell">{t('Sell')}</option></select></div>
-        <div className="field"><label>{t('Order')}</label><select className="select" value={mode} onChange={(e) => setMode(e.target.value as any)}><option value="limit">Limit</option><option value="stop">Stop Limit</option><option value="market">Market</option></select></div>
+        <div className="field"><label>{t('Order')}</label><select className="select" value={mode} onChange={(e) => setMode(e.target.value as OrderMode)}><option value="auto">{t('Auto (recommended)')}</option><option value="limit">{t('Limit')}</option><option value="stop_market">{t('Stop Market')}</option><option value="stop_limit">{t('Stop Limit')}</option><option value="market">{t('Market')}</option></select></div>
       </div>
+
+      {mode === 'auto' && (
+        <div className="muted" style={{ fontSize: 11, margin: '-2px 0 10px' }}>
+          {t('Auto selected: {type}', { type: executionModeLabel })} · {t('Automatic mode chooses Limit for pullbacks and Stop Market for breakouts.')}
+        </div>
+      )}
+      {manualCrossesMarket && (
+        <div className="inline-error" style={{ background: '#2d2717', borderColor: '#5a4a21', color: '#e6c875' }}>
+          {t('This Limit crosses the current market and may execute immediately. Auto would use {type}.', { type: t('Stop Market') })}
+        </div>
+      )}
+      {manualStopWrongSide && (
+        <div className="inline-error" style={{ background: '#2d2717', borderColor: '#5a4a21', color: '#e6c875' }}>
+          {t('This Stop is already on the triggered side of the market. Auto would use {type}.', { type: t('Limit') })}
+        </div>
+      )}
 
       {selected ? (
         <div className="drawer-section">
-          {mode === 'stop' && <div className="field"><label>{t('Trigger')}</label><input className="input" type="number" step="any" value={trigger || ''} onChange={(e) => setTrigger(Number(e.target.value))} /></div>}
+          {isStopExecution && mode !== 'auto' && <div className="field"><label>{t('Trigger')}</label><input className="input" type="number" step="any" value={trigger || ''} onChange={(e) => setTrigger(Number(e.target.value))} /></div>}
           <div className="field"><label>{t('Entry')}</label><input className="input" type="number" step="any" value={entry || ''} onChange={(e) => changeDrawing('entry', Number(e.target.value))} /></div>
           <div className="field-grid">
             <div className="field"><label>{t('Stop Loss')}</label><input className="input" type="number" step="any" value={stop || ''} onChange={(e) => changeDrawing('stop', Number(e.target.value))} /></div>
@@ -272,7 +313,7 @@ export default function CalculatorDrawer({
           <div className="field">
             <label>{t('Price level')}</label>
             <input className="input" type="number" step="any" value={priceLevel || ''} onChange={(e) => applyPriceLevel(Number(e.target.value))} />
-            {mode === 'market' && <small className="muted">{t('Market calculations use the current market price; the selected level is kept here for reference.')}</small>}
+            {executionMode === 'market' && <small className="muted">{t('Market calculations use the current market price; the selected level is kept here for reference.')}</small>}
           </div>
 
           <div className="calculator-levels">
@@ -298,8 +339,8 @@ export default function CalculatorDrawer({
             </div>
           </div>
 
-          {mode === 'stop' && <div className="field-grid"><div className="field"><label>Trigger % ATR</label><input className="input" type="number" step="0.1" value={triggerAtr} onChange={(e) => setTriggerAtr(Number(e.target.value))} /></div><div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div></div>}
-          {mode === 'limit' && <div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div>}
+          {isStopExecution && <div className="field-grid"><div className="field"><label>Trigger % ATR</label><input className="input" type="number" step="0.1" value={triggerAtr} onChange={(e) => setTriggerAtr(Number(e.target.value))} /></div><div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div></div>}
+          {executionMode === 'limit' && <div className="field"><label>Slip % ATR</label><input className="input" type="number" step="0.1" value={slipAtr} onChange={(e) => setSlipAtr(Number(e.target.value))} /></div>}
           {stopMode === 'atr' ? <div className="field"><label>SL % ATR</label><input className="input" type="number" step="0.5" value={stopAtr} onChange={(e) => setStopAtr(Number(e.target.value))} /></div> : <div className="field"><label>{t('Technical SL')}</label><input className="input" type="number" step="any" value={technicalStop || ''} onChange={(e) => setTechnicalStop(Number(e.target.value))} /></div>}
           <div className="field"><label>{t('Target R:R')}</label><input className="input" type="number" step="0.5" min="0.5" value={legacyRr} onChange={(e) => setLegacyRr(Number(e.target.value))} /></div>
           <div className="muted" style={{ fontSize: 10 }}>{t('Legacy strategy pointType: {value}',{value:legacy.pointType})}</div>
@@ -338,7 +379,7 @@ export default function CalculatorDrawer({
         confirmLabel={t('Send to Bybit')}
         onClose={() => setConfirmOpen(false)}
         onConfirm={() => place.mutate()}
-        body={<><b>{symbol} {t(side)}</b><br />{mode.toUpperCase()} · {t('Qty')} {num(values.positionSize, 8)}<br />{t('Entry')} {num(values.entry, 8)} · SL {num(values.stop, 8)} · TP {num(values.target, 8)}<br />{language==='uk'?'Ризик':language==='ru'?'Риск':'Risk'} {money(values.riskAmount)} · R:R {Number(values.rr).toFixed(2)}</>}
+        body={<><b>{symbol} {t(side)}</b><br />{mode === 'auto' ? `${t('Auto')} → ${executionModeLabel}` : executionModeLabel} · {t('Qty')} {num(values.positionSize, 8)}<br />{t('Entry')} {num(values.entry, 8)} · SL {num(values.stop, 8)} · TP {num(values.target, 8)}<br />{language==='uk'?'Ризик':language==='ru'?'Риск':'Risk'} {money(values.riskAmount)} · R:R {Number(values.rr).toFixed(2)}</>}
       />
     </aside>
   );

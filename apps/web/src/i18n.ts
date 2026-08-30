@@ -84,7 +84,11 @@ Object.assign(ru, {
   'Reset saved chart positions':'Сбросить сохранённые позиции графика',
   'Each symbol + timeframe remembers its own horizontal zoom and position in this browser.':'Каждый тикер + таймфрейм запоминает свой горизонтальный масштаб и позицию в этом браузере.',
   'Label detail':'Детализация подписей','Show order / position size':'Показывать размер ордера / позиции','Show unrealized PnL on position label':'Показывать нереализованный PnL в подписи позиции','Lines':'Линии','Position':'Позиция','Loading notification preferences…':'Загрузка настроек уведомлений…',
-  'Daily mirror + rejection':'Дневной mirror + отбой','FOMO, daily level, high volume':'FOMO, дневной уровень, высокий объём','What was the idea? What went well? What should change next time?':'В чём была идея? Что получилось хорошо? Что изменить в следующий раз?'
+  'Daily mirror + rejection':'Дневной mirror + отбой','FOMO, daily level, high volume':'FOMO, дневной уровень, высокий объём','What was the idea? What went well? What should change next time?':'В чём была идея? Что получилось хорошо? Что изменить в следующий раз?',
+  'Auto':'Авто','Auto (recommended)':'Авто (рекомендуется)','Stop Market':'Stop Market','Auto selected: {type}':'Авто выбрало: {type}',
+  'Automatic mode chooses Limit for pullbacks and Stop Market for breakouts.':'Авто использует Limit для входа на откате и Stop Market для входа на пробое.',
+  'This Limit crosses the current market and may execute immediately. Auto would use {type}.':'Этот Limit пересекает текущую рыночную цену и может исполниться сразу. Авто использовало бы {type}.',
+  'This Stop is already on the triggered side of the market. Auto would use {type}.':'Этот Stop уже находится на сработавшей стороне рынка. Авто использовало бы {type}.'
 });
 Object.assign(uk, {
   'Neutral chart controls use automatic contrast, so white objects do not disappear on a light background.':'Нейтральні елементи графіка використовують автоконтраст, тому світлі об’єкти не зникають на світлому фоні.',
@@ -96,7 +100,11 @@ Object.assign(uk, {
   'Reset saved chart positions':'Скинути збережені позиції графіка',
   'Each symbol + timeframe remembers its own horizontal zoom and position in this browser.':'Кожен тікер + таймфрейм запам’ятовує свій горизонтальний масштаб і позицію в цьому браузері.',
   'Label detail':'Деталізація підписів','Show order / position size':'Показувати розмір ордера / позиції','Show unrealized PnL on position label':'Показувати нереалізований PnL у підписі позиції','Lines':'Лінії','Position':'Позиція','Loading notification preferences…':'Завантаження налаштувань сповіщень…',
-  'Daily mirror + rejection':'Денний mirror + відбій','FOMO, daily level, high volume':'FOMO, денний рівень, високий обсяг','What was the idea? What went well? What should change next time?':'У чому була ідея? Що вийшло добре? Що змінити наступного разу?'
+  'Daily mirror + rejection':'Денний mirror + відбій','FOMO, daily level, high volume':'FOMO, денний рівень, високий обсяг','What was the idea? What went well? What should change next time?':'У чому була ідея? Що вийшло добре? Що змінити наступного разу?',
+  'Auto':'Авто','Auto (recommended)':'Авто (рекомендовано)','Stop Market':'Stop Market','Auto selected: {type}':'Авто вибрало: {type}',
+  'Automatic mode chooses Limit for pullbacks and Stop Market for breakouts.':'Авто використовує Limit для входу на відкаті та Stop Market для входу на пробої.',
+  'This Limit crosses the current market and may execute immediately. Auto would use {type}.':'Цей Limit перетинає поточну ринкову ціну й може виконатися одразу. Авто використало б {type}.',
+  'This Stop is already on the triggered side of the market. Auto would use {type}.':'Цей Stop уже знаходиться на спрацьованому боці ринку. Авто використало б {type}.'
 });
 
 const dictionaries: Record<AppLanguage, Dict> = { en: {}, uk, ru };

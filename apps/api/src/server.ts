@@ -272,19 +272,36 @@ app.post('/api/trade/order',async(req,reply)=>{
   if(!requireLive(reply))return;
   const b=z.object({
     accountId:z.number().int().positive(),symbol:z.string(),side:z.enum(['Buy','Sell']),orderType:z.enum(['Market','Limit']),qty:z.number().positive(),
+    executionMode:z.enum(['market','limit','stop_market','stop_limit']).optional(),autoMode:z.boolean().optional(),autoReferencePrice:z.number().positive().optional(),
     price:z.number().positive().optional(),triggerPrice:z.number().positive().optional(),stopLoss:z.number().positive().optional(),takeProfit:z.number().positive().optional(),positionIdx:z.number().int().default(0),
     pointType:z.number().int().optional(),priceLevel:z.number().positive().optional(),plannedRr:z.number().optional(),riskPercent:z.number().min(0).optional(),riskAmount:z.number().min(0).optional(),plannedEntry:z.number().positive().optional()
   }).parse(req.body);
   const account=accountById(b.accountId);const adapter=adapterFor(b.accountId);
   const symbol=b.symbol.toUpperCase();const qty=await adapter.normalizeQty(symbol,b.qty);if(Number(qty)<=0)return reply.code(400).send({error:'Position quantity is below instrument qtyStep'});
-  const params:any={symbol,side:b.side,orderType:b.orderType,qty,positionIdx:b.positionIdx,timeInForce:'GTC',orderLinkId:`tradev2-${Date.now()}`};
-  if(b.orderType==='Limit'){if(!b.price)return reply.code(400).send({error:'Limit price is required'});params.price=await adapter.normalizePrice(symbol,b.price);}
-  if(b.triggerPrice){params.triggerPrice=await adapter.normalizePrice(symbol,b.triggerPrice);params.triggerDirection=b.side==='Buy'?1:2;}
+  const executionMode=b.executionMode ?? (b.triggerPrice ? (b.orderType==='Market'?'stop_market':'stop_limit') : (b.orderType==='Market'?'market':'limit'));
+
+  if(b.autoMode&&b.autoReferencePrice){
+    const lastPrice=await adapter.getLastPrice(symbol);
+    const ref=b.autoReferencePrice;
+    const epsilon=Math.max(Math.abs(lastPrice)*1e-10,1e-12);
+    const expected=Math.abs(ref-lastPrice)<=epsilon?'market':b.side==='Buy'?(ref>lastPrice?'stop_market':'limit'):(ref<lastPrice?'stop_market':'limit');
+    if(expected!==executionMode){
+      return reply.code(409).send({error:'Market moved across the entry level. Review the automatically selected order type and confirm again.',expectedExecutionMode:expected,lastPrice});
+    }
+  }
+
+  const orderType=executionMode==='market'||executionMode==='stop_market'?'Market':'Limit';
+  const needsLimitPrice=executionMode==='limit'||executionMode==='stop_limit';
+  const needsTrigger=executionMode==='stop_market'||executionMode==='stop_limit';
+  const params:any={symbol,side:b.side,orderType,qty,positionIdx:b.positionIdx,timeInForce:'GTC',orderLinkId:`tradev2-${Date.now()}`};
+  if(needsLimitPrice){if(!b.price)return reply.code(400).send({error:'Limit price is required'});params.price=await adapter.normalizePrice(symbol,b.price);}
+  if(needsTrigger){if(!b.triggerPrice)return reply.code(400).send({error:'Trigger price is required'});params.triggerPrice=await adapter.normalizePrice(symbol,b.triggerPrice);params.triggerDirection=b.side==='Buy'?1:2;}
   if(b.stopLoss)params.stopLoss=await adapter.normalizePrice(symbol,b.stopLoss);if(b.takeProfit)params.takeProfit=await adapter.normalizePrice(symbol,b.takeProfit);
   const r=await adapter.submitOrder(b.accountId,params);
-  appendSystemEvent(db,{eventType:'order.submit.requested',accountId:b.accountId,symbol,message:'Order submit requested',payload:{exchange:account.exchange,retCode:r.retCode,retMsg:r.retMsg,orderLinkId:params.orderLinkId}});
+  appendSystemEvent(db,{eventType:'order.submit.requested',accountId:b.accountId,symbol,message:'Order submit requested',payload:{exchange:account.exchange,executionMode,autoMode:Boolean(b.autoMode),retCode:r.retCode,retMsg:r.retMsg,orderLinkId:params.orderLinkId}});
   if(!exchangeOk(reply,r))return;
-  upsertJournalSubmittedOrder(db,{accountId:b.accountId,accountName:account.name,symbol,side:b.side,orderType:b.triggerPrice?'Stop Limit':b.orderType,triggerPrice:b.triggerPrice??null,entryPrice:b.plannedEntry??b.price??null,stopLoss:b.stopLoss??null,takeProfit:b.takeProfit??null,quantity:Number(qty),pointType:b.pointType??null,priceLevel:b.priceLevel??null,rr:0,riskPercent:b.riskPercent??null,riskAmount:b.riskAmount??null,exchangeOrderId:String((r as any)?.result?.orderId||'')||null,orderLinkId:params.orderLinkId,reduceOnly:false,raw:{request:b,response:{retCode:r.retCode,retMsg:r.retMsg,result:(r as any).result}}});
+  const journalOrderType=executionMode==='stop_market'?'Stop Market':executionMode==='stop_limit'?'Stop Limit':orderType;
+  upsertJournalSubmittedOrder(db,{accountId:b.accountId,accountName:account.name,symbol,side:b.side,orderType:journalOrderType,triggerPrice:needsTrigger?(b.triggerPrice??null):null,entryPrice:b.plannedEntry??b.price??b.autoReferencePrice??null,stopLoss:b.stopLoss??null,takeProfit:b.takeProfit??null,quantity:Number(qty),pointType:b.pointType??null,priceLevel:b.priceLevel??null,rr:0,riskPercent:b.riskPercent??null,riskAmount:b.riskAmount??null,exchangeOrderId:String((r as any)?.result?.orderId||'')||null,orderLinkId:params.orderLinkId,reduceOnly:false,raw:{request:b,resolvedExecutionMode:executionMode,response:{retCode:r.retCode,retMsg:r.retMsg,result:(r as any).result}}});
   return r;
 });
 
