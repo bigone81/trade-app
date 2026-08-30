@@ -49,8 +49,11 @@ export class BybitAdapter {
   async normalizeQty(symbol:string,value:number){const r=await this.getInstrumentRules(symbol);return align(value,r.qtyStep,'floor');}
   async normalizePrice(symbol:string,value:number){const r=await this.getInstrumentRules(symbol);return align(value,r.tickSize,'round');}
 
-  async getCandles(symbol:string,interval:string,limit=300){
-    const res=await this.publicClient.getKline({category:'linear',symbol:symbol.toUpperCase(),interval:interval as any,limit});
+  async getCandles(symbol:string,interval:string,limit=300,range:{start?:number;end?:number}={}){
+    const params:any={category:'linear',symbol:symbol.toUpperCase(),interval:interval as any,limit};
+    if(Number.isFinite(range.start))params.start=Math.max(0,Math.floor(Number(range.start)));
+    if(Number.isFinite(range.end))params.end=Math.max(0,Math.floor(Number(range.end)));
+    const res=await this.publicClient.getKline(params);
     if(res.retCode!==0)throw new Error(res.retMsg||'Bybit kline error');
     return res.result.list.map((k:any)=>({time:Math.floor(Number(k[0])/1000),open:num(k[1]),high:num(k[2]),low:num(k[3]),close:num(k[4]),volume:num(k[5])})).reverse();
   }

@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getExchangeAccount, getJournalImage, getNotificationSettings, listAlerts, listExchangeAccounts, listJournal, listJournalImages, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, recordJournalBybitExecution, resolveExchangeAccountRuntime, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
+import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getExchangeAccount, getJournalImage, getNotificationSettings, listAlerts, listExchangeAccounts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, recordJournalBybitExecution, resolveExchangeAccountRuntime, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { appConfig } from './config.js';
 import { BybitAdapter } from '@trade/exchanges-bybit';
 
@@ -34,8 +34,8 @@ app.get('/api/config',async()=>({accounts:publicAccounts(),liveTradingEnabled:ap
 
 app.get('/api/market/tickers',async()=>bybit.getTickers());
 app.get('/api/market/instrument',async(req)=>{const q=z.object({symbol:z.string().min(2).max(30)}).parse(req.query);const rules=await bybit.getInstrumentRules(q.symbol);return {symbol:q.symbol.toUpperCase(),tickSize:rules.tickSize,qtyStep:rules.qtyStep};});
-app.get('/api/market/candles',async(req)=>{const q=z.object({symbol:z.string().min(2).max(30),interval:z.string().default('15'),limit:z.coerce.number().int().min(30).max(1000).default(300)}).parse(req.query);return bybit.getCandles(q.symbol,q.interval,q.limit);});
-app.get('/api/market/levels',async(req)=>{const q=z.object({symbol:z.string(),interval:z.string().default('D')}).parse(req.query);const candles=await bybit.getCandles(q.symbol,q.interval,30);return detectLevels(candles);});
+app.get('/api/market/candles',async(req)=>{const q=z.object({symbol:z.string().min(2).max(30),interval:z.string().default('15'),limit:z.coerce.number().int().min(30).max(1000).default(300),start:z.coerce.number().int().positive().optional(),end:z.coerce.number().int().positive().optional()}).parse(req.query);return bybit.getCandles(q.symbol,q.interval,q.limit,{start:q.start,end:q.end});});
+app.get('/api/market/levels',async(req)=>{const q=z.object({symbol:z.string(),interval:z.string().default('D'),end:z.coerce.number().int().positive().optional()}).parse(req.query);const candles=await bybit.getCandles(q.symbol,q.interval,30,{end:q.end});return detectLevels(candles);});
 app.get('/api/market/atr',async(req)=>{const q=z.object({symbol:z.string(),interval:z.string().default('D'),period:z.coerce.number().int().min(2).max(100).default(14)}).parse(req.query);const candles=await bybit.getCandles(q.symbol,q.interval,Math.max(q.period+2,30));const tr:number[]=[];for(let i=1;i<candles.length;i++){const c=candles[i]!,p=candles[i-1]!;tr.push(Math.max(c.high-c.low,Math.abs(c.high-p.close),Math.abs(c.low-p.close)));}return {symbol:q.symbol.toUpperCase(),atr:tr.slice(-q.period).reduce((a,b)=>a+b,0)/Math.max(1,Math.min(q.period,tr.length))};});
 
 app.get('/api/drawings/levels',async(req)=>{const q=z.object({symbol:z.string()}).parse(req.query);return listManualLevels(db,q.symbol);});
@@ -55,6 +55,15 @@ app.patch('/api/alerts/:id/active',async(req,reply)=>{const id=z.coerce.number()
 app.delete('/api/alerts/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);return deleteAlert(db,id)?{ok:true}:reply.code(404).send({error:'Not found'});});
 
 app.get('/api/journal',async(req)=>{const q=z.object({accountId:z.coerce.number().int().positive().optional(),symbol:z.string().optional(),limit:z.coerce.number().int().optional()}).parse(req.query);return listJournal(db,q);});
+app.get('/api/journal/page',async(req)=>{
+  const q=z.object({
+    accountId:z.coerce.number().int().positive().optional(),symbol:z.string().optional(),side:z.enum(['Buy','Sell']).optional(),
+    style:z.coerce.number().int().min(0).max(99).optional(),status:z.coerce.number().int().min(0).max(99).optional(),pointType:z.coerce.number().int().optional(),
+    dateFrom:z.string().optional(),dateTo:z.string().optional(),page:z.coerce.number().int().min(1).default(1),pageSize:z.coerce.number().int().min(25).max(200).default(50),
+    sort:z.enum(['newest','oldest','best_r','worst_r','highest_pnl']).default('newest'),
+  }).parse(req.query);
+  return listJournalPage(db,q);
+});
 app.patch('/api/journal/:id',async(req,reply)=>{const id=z.coerce.number().int().positive().parse((req.params as any).id);const b=z.object({rr:z.number().min(-100).max(100).optional(),style:z.number().int().min(0).max(99).optional(),status:z.number().int().min(0).max(99).optional(),note:z.string().max(20000).nullable().optional(),setup:z.string().max(200).nullable().optional(),tags:z.array(z.string().max(80)).max(30).optional(),executionQuality:z.string().max(80).nullable().optional(),exitPrice:z.number().min(0).nullable().optional(),pnl:z.number().nullable().optional(),fees:z.number().min(0).nullable().optional()}).parse(req.body);const row=updateJournalOrder(db,id,b);if(!row)return reply.code(404).send({error:'Not found'});return row;});
 
 app.post('/api/journal/sync',async(req)=>{
@@ -275,7 +284,7 @@ app.post('/api/trade/order',async(req,reply)=>{
   const r=await adapter.submitOrder(b.accountId,params);
   appendSystemEvent(db,{eventType:'order.submit.requested',accountId:b.accountId,symbol,message:'Order submit requested',payload:{exchange:account.exchange,retCode:r.retCode,retMsg:r.retMsg,orderLinkId:params.orderLinkId}});
   if(!exchangeOk(reply,r))return;
-  upsertJournalSubmittedOrder(db,{accountId:b.accountId,accountName:account.name,symbol,side:b.side,orderType:b.triggerPrice?'Stop Limit':b.orderType,triggerPrice:b.triggerPrice??null,entryPrice:b.plannedEntry??b.price??null,stopLoss:b.stopLoss??null,takeProfit:b.takeProfit??null,quantity:Number(qty),pointType:b.pointType??null,priceLevel:b.priceLevel??null,rr:b.plannedRr??null,riskPercent:b.riskPercent??null,riskAmount:b.riskAmount??null,exchangeOrderId:String((r as any)?.result?.orderId||'')||null,orderLinkId:params.orderLinkId,reduceOnly:false,raw:{request:b,response:{retCode:r.retCode,retMsg:r.retMsg,result:(r as any).result}}});
+  upsertJournalSubmittedOrder(db,{accountId:b.accountId,accountName:account.name,symbol,side:b.side,orderType:b.triggerPrice?'Stop Limit':b.orderType,triggerPrice:b.triggerPrice??null,entryPrice:b.plannedEntry??b.price??null,stopLoss:b.stopLoss??null,takeProfit:b.takeProfit??null,quantity:Number(qty),pointType:b.pointType??null,priceLevel:b.priceLevel??null,rr:0,riskPercent:b.riskPercent??null,riskAmount:b.riskAmount??null,exchangeOrderId:String((r as any)?.result?.orderId||'')||null,orderLinkId:params.orderLinkId,reduceOnly:false,raw:{request:b,response:{retCode:r.retCode,retMsg:r.retMsg,result:(r as any).result}}});
   return r;
 });
 

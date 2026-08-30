@@ -215,6 +215,23 @@ export default function SettingsPage() {
         </section>
 
         <section className="card settings-card">
+          <h3>{preferences.language==='uk'?'Щоденник':preferences.language==='ru'?'Журнал':'Journal'}</h3>
+          <div className="field">
+            <label>{preferences.language==='uk'?'Угод на сторінці':preferences.language==='ru'?'Сделок на странице':'Trades per page'}</label>
+            <select className="select" value={preferences.journal.pageSize} onChange={(e)=>save({...preferences,journal:{...preferences.journal,pageSize:Number(e.target.value) as 25|50|100|200}})}>
+              <option value={25}>25</option><option value={50}>50</option><option value={100}>100</option><option value={200}>200</option>
+            </select>
+          </div>
+          <label className="setting-check"><input type="checkbox" checked={preferences.journal.rememberFilters} onChange={(e)=>save({...preferences,journal:{...preferences.journal,rememberFilters:e.target.checked}})}/> {preferences.language==='uk'?'Запам’ятовувати фільтри та сортування':preferences.language==='ru'?'Запоминать фильтры и сортировку':'Remember filters and sorting'}</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.journal.rememberPage} onChange={(e)=>save({...preferences,journal:{...preferences.journal,rememberPage:e.target.checked}})}/> {preferences.language==='uk'?'Запам’ятовувати останню сторінку':preferences.language==='ru'?'Запоминать последнюю страницу':'Remember last page'}</label>
+          <div className="settings-subtitle">{preferences.language==='uk'?'Автоматичні знімки графіка':preferences.language==='ru'?'Автоматические снимки графика':'Automatic chart snapshots'}</div>
+          <label className="setting-check"><input type="checkbox" checked={preferences.journal.snapshot5m} onChange={(e)=>save({...preferences,journal:{...preferences.journal,snapshot5m:e.target.checked}})}/> 5m</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.journal.snapshot1h} onChange={(e)=>save({...preferences,journal:{...preferences.journal,snapshot1h:e.target.checked}})}/> 1H</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.journal.snapshot1d} onChange={(e)=>save({...preferences,journal:{...preferences.journal,snapshot1d:e.target.checked}})}/> 1D</label>
+          <p className="muted settings-hint">{preferences.language==='uk'?'Нові угоди починаються з результатом BE / 0R. Результат R заповнюється лише вручну. Знімки включають бари, авто/ручні рівні, alerts, R/R та Entry/SL/TP угоди.':preferences.language==='ru'?'Новые сделки начинаются с результата BE / 0R. Результат R заполняется только вручную. Снимки включают бары, авто/ручные уровни, alerts, R/R и Entry/SL/TP сделки.':'New trades start at BE / 0R. Result R is manual-only. Snapshots include bars, auto/manual levels, alerts, R/R and the trade Entry/SL/TP.'}</p>
+        </section>
+
+        <section className="card settings-card">
           <h3>{t('Exchanges & accounts')}</h3>
           {exchangeGroups.map(([exchange, rows]) => <div key={exchange}>
             <div className="exchange-heading"><strong>{exchange.toUpperCase()}</strong><span>{rows.filter((a) => a.configured).length}/{rows.length} {t('configured')}</span></div>

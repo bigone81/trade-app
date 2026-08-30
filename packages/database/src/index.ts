@@ -393,6 +393,54 @@ export function listJournal(db:SqliteDb, filters:{accountId?:number;symbol?:stri
   return db.prepare(`SELECT journal_orders.*, (SELECT COUNT(*) FROM journal_images WHERE journal_order_id=journal_orders.id) AS image_count FROM journal_orders ${where} ORDER BY occurred_at DESC LIMIT ?`).all(...p);
 }
 
+export type JournalPageFilters = {
+  accountId?:number;
+  symbol?:string;
+  side?:string;
+  style?:number;
+  status?:number;
+  pointType?:number;
+  dateFrom?:string;
+  dateTo?:string;
+  page?:number;
+  pageSize?:number;
+  sort?:'newest'|'oldest'|'best_r'|'worst_r'|'highest_pnl';
+};
+
+export function listJournalPage(db:SqliteDb, filters:JournalPageFilters={}){
+  const clauses:string[]=[];
+  const params:any[]=[];
+  if(filters.accountId){clauses.push('account_id=?');params.push(filters.accountId);}
+  if(filters.symbol?.trim()){clauses.push('UPPER(symbol) LIKE ?');params.push(`%${filters.symbol.trim().toUpperCase()}%`);}
+  if(filters.side){clauses.push('side=?');params.push(filters.side);}
+  if(typeof filters.style==='number'){clauses.push('COALESCE(style,0)=?');params.push(filters.style);}
+  if(typeof filters.status==='number'){clauses.push('COALESCE(status,0)=?');params.push(filters.status);}
+  if(typeof filters.pointType==='number'){clauses.push('point_type=?');params.push(filters.pointType);}
+  if(filters.dateFrom){clauses.push('date(occurred_at)>=date(?)');params.push(filters.dateFrom);}
+  if(filters.dateTo){clauses.push('date(occurred_at)<=date(?)');params.push(filters.dateTo);}
+  const where=clauses.length?`WHERE ${clauses.join(' AND ')}`:'';
+  const page=Math.max(1,Math.floor(filters.page??1));
+  const pageSize=Math.max(25,Math.min(200,Math.floor(filters.pageSize??50)));
+  const sortSql={newest:'occurred_at DESC, id DESC',oldest:'occurred_at ASC, id ASC',best_r:'COALESCE(rr,0) DESC, occurred_at DESC',worst_r:'COALESCE(rr,0) ASC, occurred_at DESC',highest_pnl:'COALESCE(pnl,0) DESC, occurred_at DESC'}[filters.sort??'newest'];
+  const countRow:any=db.prepare(`SELECT COUNT(*) AS count FROM journal_orders ${where}`).get(...params);
+  const total=Number(countRow?.count)||0;
+  const totalPages=Math.max(1,Math.ceil(total/pageSize));
+  const safePage=Math.min(page,totalPages);
+  const offset=(safePage-1)*pageSize;
+  const rows=db.prepare(`SELECT journal_orders.*, (SELECT COUNT(*) FROM journal_images WHERE journal_order_id=journal_orders.id) AS image_count FROM journal_orders ${where} ORDER BY ${sortSql} LIMIT ? OFFSET ?`).all(...params,pageSize,offset);
+  const analysisRows=db.prepare(`SELECT account_id,legacy_account,side,style,point_type,setup,rr FROM journal_orders ${where}`).all(...params) as any[];
+  const scored=analysisRows.map(r=>Number(r.rr)).filter(Number.isFinite);
+  const wins=scored.filter(v=>v>0),losses=scored.filter(v=>v<0);
+  const grossWin=wins.reduce((a,b)=>a+b,0),grossLoss=Math.abs(losses.reduce((a,b)=>a+b,0));
+  const net=scored.reduce((a,b)=>a+b,0),decided=wins.length+losses.length;
+  const summary={trades:total,winrate:decided?wins.length/decided*100:0,net,avg:scored.length?net/scored.length:0,pf:grossLoss?grossWin/grossLoss:(grossWin?null:0),avgWin:wins.length?grossWin/wins.length:0,avgLoss:losses.length?losses.reduce((a,b)=>a+b,0)/losses.length:0};
+  const breakdown=(label:(r:any)=>string)=>{const map=new Map<string,{name:string;trades:number;wins:number;losses:number;net:number}>();for(const r of analysisRows){const name=label(r)||'—';const x=map.get(name)||{name,trades:0,wins:0,losses:0,net:0};x.trades++;const rr=Number(r.rr)||0;x.net+=rr;if(rr>0)x.wins++;if(rr<0)x.losses++;map.set(name,x);}return[...map.values()].sort((a,b)=>b.trades-a.trades);};
+  const styleNames:Record<number,string>={0:'—',1:'Breakout',2:'LP',3:'Rebound'};
+  const pointNames:Record<number,string>={10:'Stop Limit · ATR',11:'Stop Limit · Technical',20:'Limit · ATR',21:'Limit · Technical',30:'Market · ATR',31:'Market · Technical'};
+  const breakdowns={style:breakdown(r=>styleNames[Number(r.style||0)]||`Style ${r.style}`),account:breakdown(r=>r.legacy_account||`Account ${r.account_id||'—'}`),side:breakdown(r=>r.side||'—'),point:breakdown(r=>pointNames[Number(r.point_type||0)]||String(r.point_type||'—')),setup:breakdown(r=>r.setup||'Unclassified')};
+  return {rows,total,page:safePage,pageSize,totalPages,summary,breakdowns};
+}
+
 export type JournalImage = {
   id:number; journal_order_id:number; kind:'before'|'entry'|'management'|'exit'|'other'; path:string; original_name:string|null; mime:string; size_bytes:number; created_at:string;
 };
@@ -459,18 +507,18 @@ export function upsertJournalSubmittedOrder(db:SqliteDb,input:JournalSubmittedOr
       legacy_account=?,symbol=?,side=?,order_type=?,trigger_price=?,
       entry_price=CASE WHEN entry_price IS NULL OR entry_price=0 THEN ? ELSE entry_price END,
       stop_loss=?,take_profit=?,quantity=CASE WHEN quantity IS NULL OR quantity=0 THEN ? ELSE quantity END,
-      point_type=COALESCE(?,point_type),price_level=COALESCE(?,price_level),rr=COALESCE(?,rr),
+      point_type=COALESCE(?,point_type),price_level=COALESCE(?,price_level),
       risk_percent=COALESCE(?,risk_percent),risk_amount=COALESCE(?,risk_amount),
       exchange_order_id=COALESCE(NULLIF(?,''),exchange_order_id),order_link_id=COALESCE(NULLIF(?,''),order_link_id),
       reduce_only=?,raw_json=COALESCE(?,raw_json),updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-      .run(input.accountName,input.symbol.toUpperCase(),input.side,input.orderType,input.triggerPrice??null,input.entryPrice??null,input.stopLoss??null,input.takeProfit??null,input.quantity??null,input.pointType??null,input.priceLevel??null,input.rr??null,input.riskPercent??null,input.riskAmount??null,input.exchangeOrderId??'',input.orderLinkId??'',input.reduceOnly?1:0,input.raw===undefined?null:JSON.stringify(input.raw),existing.id);
+      .run(input.accountName,input.symbol.toUpperCase(),input.side,input.orderType,input.triggerPrice??null,input.entryPrice??null,input.stopLoss??null,input.takeProfit??null,input.quantity??null,input.pointType??null,input.priceLevel??null,input.riskPercent??null,input.riskAmount??null,input.exchangeOrderId??'',input.orderLinkId??'',input.reduceOnly?1:0,input.raw===undefined?null:JSON.stringify(input.raw),existing.id);
     return db.prepare('SELECT * FROM journal_orders WHERE id=?').get(existing.id);
   }
   const result=db.prepare(`INSERT INTO journal_orders(
     legacy_account,account_id,occurred_at,symbol,side,order_type,trigger_price,entry_price,stop_loss,take_profit,quantity,
     point_type,price_level,status,rr,style,raw_json,exchange,exchange_order_id,order_link_id,reduce_only,risk_percent,risk_amount
   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,0,?,'bybit',?,?,?,?,?)`)
-    .run(input.accountName,input.accountId,occurredAt,input.symbol.toUpperCase(),input.side,input.orderType,input.triggerPrice??null,input.entryPrice??null,input.stopLoss??null,input.takeProfit??null,input.quantity??null,input.pointType??null,input.priceLevel??null,input.rr??0,input.raw===undefined?null:JSON.stringify(input.raw),input.exchangeOrderId??null,input.orderLinkId??null,input.reduceOnly?1:0,input.riskPercent??null,input.riskAmount??null);
+    .run(input.accountName,input.accountId,occurredAt,input.symbol.toUpperCase(),input.side,input.orderType,input.triggerPrice??null,input.entryPrice??null,input.stopLoss??null,input.takeProfit??null,input.quantity??null,input.pointType??null,input.priceLevel??null,0,input.raw===undefined?null:JSON.stringify(input.raw),input.exchangeOrderId??null,input.orderLinkId??null,input.reduceOnly?1:0,input.riskPercent??null,input.riskAmount??null);
   return db.prepare('SELECT * FROM journal_orders WHERE id=?').get(Number(result.lastInsertRowid));
 }
 

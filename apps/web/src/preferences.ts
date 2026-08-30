@@ -31,6 +31,14 @@ export interface AppPreferences {
     showCurrentPriceLine: boolean;
     autoFollowLive: boolean;
   };
+  journal: {
+    pageSize: 25 | 50 | 100 | 200;
+    rememberFilters: boolean;
+    rememberPage: boolean;
+    snapshot5m: boolean;
+    snapshot1h: boolean;
+    snapshot1d: boolean;
+  };
   tradingOverlays: {
     showOrders: boolean;
     showPositions: boolean;
@@ -84,6 +92,14 @@ export const defaultPreferences: AppPreferences = {
     showCurrentPriceLine: true,
     autoFollowLive: true,
   },
+  journal: {
+    pageSize: 50,
+    rememberFilters: true,
+    rememberPage: false,
+    snapshot5m: true,
+    snapshot1h: true,
+    snapshot1d: true,
+  },
   tradingOverlays: {
     showOrders: true,
     showPositions: true,
@@ -116,6 +132,7 @@ function mergePreferences(raw: Partial<AppPreferences> | null): AppPreferences {
     manualLevel: { ...defaultPreferences.manualLevel, ...(raw?.manualLevel || {}) },
     riskReward: { ...defaultPreferences.riskReward, ...(raw?.riskReward || {}) },
     chart: { ...defaultPreferences.chart, ...(raw?.chart || {}) },
+    journal: { ...defaultPreferences.journal, ...(raw?.journal || {}) },
     tradingOverlays: { ...defaultPreferences.tradingOverlays, ...(raw?.tradingOverlays || {}) },
   };
 }
