@@ -365,9 +365,16 @@ export default function CalculatorDrawer({
       setConfirmOpen(false);
       setError('');
       setBatchResults((previous) => {
-        if (!requestedIds?.length || !previous) return results;
-        const updates = new Map(results.map((result) => [result.accountId, result]));
-        return previous.map((result) => updates.get(result.accountId) || result);
+        const merged = !requestedIds?.length || !previous
+          ? results
+          : (() => {
+              const updates = new Map(results.map((result) => [result.accountId, result]));
+              return previous.map((result) => updates.get(result.accountId) || result);
+            })();
+        if (merged.length > 0 && merged.every((result) => result.ok)) {
+          queueMicrotask(onClose);
+        }
+        return merged;
       });
     },
     onError: (e) => { setConfirmOpen(false); setError(e.message); },

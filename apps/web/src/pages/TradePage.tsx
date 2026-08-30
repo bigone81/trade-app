@@ -98,7 +98,7 @@ export default function TradePage() {
   const actionBody = useMemo(() => {
     if (!action) return null;
     if (action.kind === 'cancel') return <>{language==='uk'?'Скасувати':language==='ru'?'Отменить':'Cancel'} <b>{action.order.symbol}</b> {language==='uk'?'ордер':language==='ru'?'ордер':'order'}{action.childOrderIds.length ? <> {language==='uk'?'разом із':language==='ru'?'вместе с':'together with'} <b>{action.childOrderIds.length} SL/TP</b></> : null}?</>;
-    if (action.kind === 'cancelAll') return <>{language==='uk'?'Скасувати всі':language==='ru'?'Отменить все':'Cancel all'} <b>{action.symbol}</b> {language==='uk'?'ордери на':language==='ru'?'ордера на':'orders on'} <b>{action.accountName}</b>?</>;
+    if (action.kind === 'cancelAll') return <>{language==='uk'?'Скасувати всі ордери по':language==='ru'?'Отменить все ордера по':'Cancel all orders for'} <b>{action.symbol}</b> {language==='uk'?'на акаунті':language==='ru'?'на аккаунте':'on'} <b>{action.accountName}</b>?</>;
     if (action.kind === 'close') return <>{language==='uk'?'Закрити':language==='ru'?'Закрыть':'Close'} <b>{action.percent}%</b> {language==='uk'?'позиції':language==='ru'?'позиции':'of'} <b>{action.position.symbol} {t(action.position.side)}</b> Market reduce-only?</>;
     return <>{language==='uk'?'Скасувати всі ордери та повністю закрити':language==='ru'?'Отменить все ордера и полностью закрыть':'Cancel all orders and close the entire'} <b>{action.position.symbol} {t(action.position.side)}</b> Market?</>;
   }, [action, language, t]);
@@ -146,7 +146,7 @@ export default function TradePage() {
             const tpPrice = group.takeProfitOrder?.triggerPrice || o.takeProfit;
             return <tr key={`${o.accountId}-${o.orderId}`} title={group.children.length ? `${group.children.length} protective order(s) grouped under this order` : undefined}>
               <td>{o.accountName}</td><td><b>{o.symbol}</b>{group.children.length ? <span className="badge order-child-badge"> +{group.children.length} SL/TP</span> : null}</td><td className={o.side === 'Buy' ? 'positive' : 'negative'}>{t(o.side)}</td><td>{o.orderType}</td><td>{t(o.orderStatus)}</td><td>{num(o.price || o.triggerPrice || 0, 6)}</td><td>{num(o.qty, 6)}</td><td>{num(o.cumExecQty, 6)}</td><td>{o.triggerPrice && o.price ? num(o.triggerPrice, 6) : '—'}</td><td>{slPrice ? num(slPrice, 6) : '—'}</td><td>{tpPrice ? num(tpPrice, 6) : '—'}</td>
-              <td><div className="row-actions"><button className="mini-btn danger" disabled={!live} onClick={() => setAction({ kind: 'cancel', order: o, childOrderIds: group.children.map((child) => child.orderId) })}>{t('Cancel')}</button><button className="mini-btn" disabled={!live} onClick={() => setAction({ kind: 'cancelAll', accountId: o.accountId, accountName: o.accountName, symbol: o.symbol })}>{t('Cancel all')}</button></div></td>
+              <td><div className="row-actions"><button className="mini-btn danger" disabled={!live} onClick={() => setAction({ kind: 'cancel', order: o, childOrderIds: group.children.map((child) => child.orderId) })}>{t('Cancel')}</button><button className="mini-btn" disabled={!live} onClick={() => setAction({ kind: 'cancelAll', accountId: o.accountId, accountName: o.accountName, symbol: o.symbol })}>{language==='uk'?`Скасувати всі по ${o.symbol}`:language==='ru'?`Отменить все по ${o.symbol}`:`Cancel all for ${o.symbol}`}</button></div></td>
             </tr>;
           })}
         </tbody></table>}
@@ -167,12 +167,12 @@ export default function TradePage() {
 
       <ConfirmDialog
         open={Boolean(action)}
-        title={action?.kind === 'flatten' ? t('Emergency flatten') : action?.kind === 'close' ? t('Close position') : action?.kind === 'cancelAll' ? t('Cancel all orders') : t('Cancel order')}
+        title={action?.kind === 'flatten' ? t('Emergency flatten') : action?.kind === 'close' ? t('Close position') : action?.kind === 'cancelAll' ? (language==='uk'?`Скасувати всі по ${action.symbol}`:language==='ru'?`Отменить все по ${action.symbol}`:`Cancel all for ${action.symbol}`) : t('Cancel order')}
         body={actionBody}
         danger
         onClose={() => setAction(null)}
         onConfirm={() => { if (action) run.mutate(action); }}
-        confirmLabel={action?.kind === 'flatten' ? t('FLATTEN NOW') : action?.kind === 'close' ? t('Close position') : action?.kind === 'cancelAll' ? t('Cancel all') : t('Cancel order')}
+        confirmLabel={action?.kind === 'flatten' ? t('FLATTEN NOW') : action?.kind === 'close' ? t('Close position') : action?.kind === 'cancelAll' ? (language==='uk'?`Скасувати всі по ${action.symbol}`:language==='ru'?`Отменить все по ${action.symbol}`:`Cancel all for ${action.symbol}`) : t('Cancel order')}
       />
     </div>
   );
