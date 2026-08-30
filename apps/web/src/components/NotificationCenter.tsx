@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Bell, CheckCheck, CircleAlert, CircleCheck, TrendingUp, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -24,7 +24,7 @@ function Icon({row}:{row:NotificationRow}){
 }
 
 export default function NotificationCenter(){
-  const [open,setOpen]=useState(false);const qc=useQueryClient();const navigate=useNavigate();const{language,t}=useI18n();
+  const [open,setOpen]=useState(false);const rootRef=useRef<HTMLDivElement|null>(null);const qc=useQueryClient();const navigate=useNavigate();const{language,t}=useI18n();
   const count=useQuery<{count:number}>({queryKey:['notification-count'],queryFn:()=>api('/api/notifications/unread-count'),refetchInterval:3000});
   const rows=useQuery<NotificationRow[]>({queryKey:['notifications'],queryFn:()=>api('/api/notifications?limit=40'),refetchInterval:3000,enabled:open});
   const refresh=()=>{void qc.invalidateQueries({queryKey:['notifications']});void qc.invalidateQueries({queryKey:['notification-count']});};
@@ -32,7 +32,17 @@ export default function NotificationCenter(){
   const readAll=useMutation({mutationFn:()=>api('/api/notifications/read-all',{method:'POST'}),onSuccess:refresh});
   const go=(row:NotificationRow)=>{if(!row.readAt)read.mutate(row.id);setOpen(false);if(row.actionUrl)navigate(row.actionUrl);};
   const unread=count.data?.count??0;
-  return <div className="notification-center">
+  useEffect(()=>{
+    if(!open)return;
+    const onPointerDown=(event:PointerEvent)=>{
+      const target=event.target as Node|null;
+      if(!target||rootRef.current?.contains(target))return;
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown',onPointerDown);
+    return()=>document.removeEventListener('pointerdown',onPointerDown);
+  },[open]);
+  return <div ref={rootRef} className="notification-center">
     <button className={open?'notification-bell open':'notification-bell'} onClick={()=>setOpen(v=>!v)} title={t('Notifications')} aria-label={t('Notifications')}>
       <Bell size={18}/>{unread>0&&<span className="notification-badge">{unread>99?'99+':unread}</span>}
     </button>

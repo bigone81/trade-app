@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, RefreshCw, X } from 'lucide-react';
 import type { AccountPublic, TradeExecution, TradeOrder, TradePosition } from '@trade/shared';
@@ -27,6 +27,18 @@ export default function TradePage() {
   const [sl, setSl] = useState('');
   const [tp, setTp] = useState('');
   const [trailing, setTrailing] = useState('');
+  const positionDrawerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!selected || action) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target || positionDrawerRef.current?.contains(target)) return;
+      setSelected(null);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [selected?.accountId, selected?.symbol, selected?.positionIdx, action]);
 
   const config = useQuery<{ accounts: AccountPublic[]; liveTradingEnabled: boolean }>({
     queryKey: ['config'],
@@ -158,7 +170,7 @@ export default function TradePage() {
         {((tab === 'positions' && !filter(positions.data).length) || (tab === 'orders' && !visibleGroupedOrders.length) || (tab === 'executions' && !filter(executions.data).length) || (tab === 'history' && !filter(history.data).length)) && <div className="empty">{t('No data for the selected filters.')}</div>}
       </div>
 
-      {selected && <aside className="drawer" style={{ position: 'fixed', right: 14, top: 14, bottom: 14, zIndex: 60, maxHeight: 'none' }}>
+      {selected && <aside ref={positionDrawerRef} className="drawer" style={{ position: 'fixed', right: 14, top: 14, bottom: 14, zIndex: 60, maxHeight: 'none' }}>
         <div className="drawer-head"><div><h2>{selected.symbol} {t(selected.side)}</h2><div className="muted">{selected.accountName} · {language==='uk'?'розмір':language==='ru'?'размер':'size'} {num(selected.size, 6)}</div></div><button className="icon-btn" onClick={() => setSelected(null)}><X size={16} /></button></div>
         <div className="metric-grid"><div className="metric"><small>{t('Entry')}</small><strong>{num(selected.avgPrice, 6)}</strong></div><div className="metric"><small>{t('Mark')}</small><strong>{num(selected.markPrice, 6)}</strong></div><div className="metric"><small>uPnL</small><strong className={selected.unrealisedPnl >= 0 ? 'positive' : 'negative'}>{money(selected.unrealisedPnl)}</strong></div><div className="metric"><small>{t('Liquidation')}</small><strong>{selected.liqPrice ? num(selected.liqPrice, 6) : '—'}</strong></div></div>
         <div className="drawer-section"><div className="field"><label>{t('Stop Loss')}</label><input className="input" type="number" step="any" value={sl} onChange={(e) => setSl(e.target.value)} /></div><div className="field"><label>{t('Take Profit')}</label><input className="input" type="number" step="any" value={tp} onChange={(e) => setTp(e.target.value)} /></div><div className="field"><label>{t('Trailing Stop distance')}</label><input className="input" type="number" step="any" value={trailing} onChange={(e) => setTrailing(e.target.value)} /></div><div className="drawer-actions"><button className="btn secondary" disabled={!live || updateStops.isPending} onClick={() => updateStops.mutate({})}>{t('Update SL / TP / Trail')}</button><button className="btn secondary" disabled={!live || updateStops.isPending} onClick={() => updateStops.mutate({ stopLoss: selected.avgPrice })}>{t('Move SL to breakeven')}</button><button className="btn ghost" onClick={() => { location.href = `/?symbol=${encodeURIComponent(selected.symbol)}`; }}>{t('Open on chart')}</button></div></div>
