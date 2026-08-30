@@ -1,1 +1,0 @@
-This folder contains only non-secret historical data copied from the supplied legacy application: order JSON files, notes, alerts and screenshots. PHP source, vendor code, cache files and API-key files are intentionally not included here.
