@@ -6,7 +6,6 @@ COPY packages ./packages
 COPY apps/web ./apps/web
 COPY apps/api ./apps/api
 COPY scripts ./scripts
-COPY legacy-data ./legacy-data
 RUN pnpm install --frozen-lockfile=false
 RUN pnpm --filter @trade/shared build && pnpm --filter @trade/exchanges-core build && pnpm --filter @trade/exchanges-bybit build && pnpm --filter @trade/domain build && pnpm --filter @trade/database build && pnpm --filter @trade/web build && pnpm --filter @trade/api build
 
@@ -20,6 +19,5 @@ COPY --from=build /app/packages ./packages
 COPY --from=build /app/apps/api ./apps/api
 COPY --from=build /app/apps/web/dist ./apps/web/dist
 COPY --from=build /app/scripts ./scripts
-COPY --from=build /app/legacy-data ./legacy-data
 EXPOSE 8080
 CMD ["node", "apps/api/dist/server.js"]
