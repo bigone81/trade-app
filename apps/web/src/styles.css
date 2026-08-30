@@ -67,6 +67,6 @@ html[data-theme="light"] .rr-ratio-button rect{fill:#fff;stroke:#7a8797}html[dat
 html[data-theme="light"] .page-number.active{background:#25364e;color:#fff}.journal-images-section .journal-auto-shot{margin-bottom:2px}
 @media(max-width:700px){.journal-pagination{grid-template-columns:1fr;justify-items:center}.journal-page-size{text-align:center}.journal-detail-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
-/* EdgeDesk v11.5 — crosshair OHLC footer */
-.chart-crosshair-bar-info{position:absolute;bottom:1px;z-index:13;display:none;pointer-events:none;max-width:calc(100% - 12px);padding:3px 7px;border-radius:5px;background:#17202de8;color:#dce5ef;border:1px solid #334155;font-size:9px;font-weight:700;line-height:1.2;white-space:nowrap;font-variant-numeric:tabular-nums;box-shadow:0 2px 8px #0005;backdrop-filter:blur(4px)}
-html[data-theme="light"] .chart-crosshair-bar-info{background:#fffffff2;color:#253244;border-color:#c9d3df;box-shadow:0 2px 8px #64748b20}
+/* EdgeDesk v11.6 — single crosshair time + Low/High label */
+.chart-crosshair-bar-info{position:absolute;bottom:0;z-index:13;display:none;pointer-events:none;transform:translateX(-50%);max-width:calc(100% - 4px);height:25px;padding:4px 8px;border-radius:3px 3px 0 0;background:#202733;color:#fff;border:0;font-family:Arial,sans-serif;font-size:12px;font-weight:600;line-height:17px;white-space:nowrap;font-variant-numeric:tabular-nums;box-shadow:none}
+html[data-theme="light"] .chart-crosshair-bar-info{background:#202733;color:#fff;border:0;box-shadow:none}

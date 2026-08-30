@@ -94,6 +94,23 @@ const formatPriceByTick = (price: number, tickSize: string | null) => {
   return Number(price).toFixed(format.precision);
 };
 
+const formatCrosshairTime = (time: number, language: 'en' | 'uk' | 'ru', timeframe: string) => {
+  const locale = language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US';
+  const date = new Date(time * 1000);
+  const datePart = new Intl.DateTimeFormat(locale, {
+    day: '2-digit',
+    month: 'short',
+    year: '2-digit',
+  }).format(date);
+  if (timeframe === 'D' || timeframe === 'W') return datePart;
+  const timePart = new Intl.DateTimeFormat(locale, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+  return `${datePart}  ${timePart}`;
+};
+
 const rgba = (hex: string, opacity: number) => {
   const clean = hex.replace('#', '');
   const value = clean.length === 3 ? clean.split('').map((x) => x + x).join('') : clean;
@@ -168,6 +185,7 @@ export default function TradingChart(p: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const crosshairBarInfoRef = useRef<HTMLDivElement>(null);
   const tickSizeRef = useRef<string | null>(p.tickSize);
+  const languageRef = useRef(language);
   const [chart, setChart] = useState<IChartApi | null>(null);
   const [series, setSeries] = useState<ISeriesApi<'Bar'> | null>(null);
   const [timelineCandles, setTimelineCandles] = useState<Candle[]>(p.candles);
@@ -223,6 +241,7 @@ export default function TradingChart(p: Props) {
   }, [p.candles, p.symbol, p.timeframe]);
 
   useEffect(() => { tickSizeRef.current = p.tickSize; }, [p.tickSize]);
+  useEffect(() => { languageRef.current = language; }, [language]);
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -243,7 +262,7 @@ export default function TradingChart(p: Props) {
         shiftVisibleRangeOnNewBar: false,
       },
       crosshair: {
-        vertLine: { color: theme === 'light' ? '#52607144' : '#60708755' },
+        vertLine: { color: theme === 'light' ? '#52607144' : '#60708755', labelVisible: false },
         horzLine: { color: theme === 'light' ? '#52607144' : '#60708755' },
       },
     });
@@ -353,16 +372,21 @@ export default function TradingChart(p: Props) {
       if (info && bar && Number.isFinite(bar.low) && Number.isFinite(bar.high) && Number.isFinite(pointX)) {
         const low = Number(bar.low);
         const high = Number(bar.high);
-        info.textContent = `Low ${formatPriceByTick(low, tickSizeRef.current)}   High ${formatPriceByTick(high, tickSizeRef.current)}`;
-        info.style.display = 'block';
-        const hostWidth = hostRef.current?.clientWidth || 0;
-        const width = info.offsetWidth || 180;
-        const gapAfterTimeLabel = 52;
-        const rightSide = pointX + gapAfterTimeLabel;
-        const left = rightSide + width <= hostWidth - 6
-          ? rightSide
-          : Math.max(6, pointX - gapAfterTimeLabel - width);
-        info.style.left = `${left}px`;
+        const rawTime = typeof param?.time === 'number'
+          ? Number(param.time)
+          : xToTime(pointX);
+        if (rawTime !== null && Number.isFinite(rawTime)) {
+          const dateText = formatCrosshairTime(rawTime, languageRef.current, timeframeRef.current);
+          info.textContent = `${dateText}  |  Low ${formatPriceByTick(low, tickSizeRef.current)}  High ${formatPriceByTick(high, tickSizeRef.current)}`;
+          info.style.display = 'block';
+          const hostWidth = hostRef.current?.clientWidth || 0;
+          const width = info.offsetWidth || 300;
+          const half = width / 2;
+          const left = Math.max(half + 2, Math.min(hostWidth - half - 2, pointX));
+          info.style.left = `${left}px`;
+        } else {
+          info.style.display = 'none';
+        }
       } else if (info) {
         info.style.display = 'none';
       }
@@ -409,7 +433,7 @@ export default function TradingChart(p: Props) {
       },
       rightPriceScale: { borderColor: light ? '#d7dee7' : '#202b3a' },
       timeScale: { borderColor: light ? '#d7dee7' : '#202b3a', rightOffset: futureBars },
-      crosshair: { vertLine: { color: light ? '#52607144' : '#60708755' }, horzLine: { color: light ? '#52607144' : '#60708755' } },
+      crosshair: { vertLine: { color: light ? '#52607144' : '#60708755', labelVisible: false }, horzLine: { color: light ? '#52607144' : '#60708755' } },
     });
     series.applyOptions({ priceLineVisible: preferences.chart.showCurrentPriceLine });
   }, [chart, series, theme, preferences.chart.showGrid, preferences.chart.showCurrentPriceLine, futureBars]);
