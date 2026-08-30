@@ -1,3 +1,4 @@
+import type { AccountPublic } from '@trade/shared';
 import { useEffect, useState } from 'react';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -11,6 +12,8 @@ export interface AppPreferences {
   defaultRiskPercent: number;
   defaultAccountId: number;
   accountRiskPercent: Record<string, number | null>;
+  riskBase: 'equity' | 'wallet' | 'fixed';
+  fixedAccountSize: Record<string, number | null>;
   manualLevel: {
     colorMode: 'auto' | 'custom';
     color: string;
@@ -72,6 +75,8 @@ export const defaultPreferences: AppPreferences = {
   defaultRiskPercent: 0.5,
   defaultAccountId: 0,
   accountRiskPercent: {},
+  riskBase: 'equity',
+  fixedAccountSize: {},
   manualLevel: {
     colorMode: 'auto',
     color: '#64748b',
@@ -129,6 +134,7 @@ function mergePreferences(raw: Partial<AppPreferences> | null): AppPreferences {
     ...defaultPreferences,
     ...(raw || {}),
     accountRiskPercent: { ...defaultPreferences.accountRiskPercent, ...(raw?.accountRiskPercent || {}) },
+    fixedAccountSize: { ...defaultPreferences.fixedAccountSize, ...(raw?.fixedAccountSize || {}) },
     manualLevel: { ...defaultPreferences.manualLevel, ...(raw?.manualLevel || {}) },
     riskReward: { ...defaultPreferences.riskReward, ...(raw?.riskReward || {}) },
     chart: { ...defaultPreferences.chart, ...(raw?.chart || {}) },
@@ -243,3 +249,37 @@ export function clearChartViews() {
     if (key?.startsWith('trade.chart-view.v1.')) localStorage.removeItem(key);
   }
 }
+
+export type CalculatorAccountSelectionMode = 'single' | 'all' | 'selected';
+export interface CalculatorAccountSelection {
+  mode: CalculatorAccountSelectionMode;
+  singleAccountId: number;
+  selectedAccountIds: number[];
+}
+
+const CALCULATOR_ACCOUNT_KEY = 'edgedesk.calculator.accounts.v1';
+
+export function readCalculatorAccountSelection(accounts: AccountPublic[], defaultAccountId = 0): CalculatorAccountSelection {
+  const ids = accounts.map((account) => account.id);
+  const fallback = ids.includes(defaultAccountId) ? defaultAccountId : (ids[0] || 0);
+  try {
+    const raw = JSON.parse(localStorage.getItem(CALCULATOR_ACCOUNT_KEY) || '{}');
+    const mode: CalculatorAccountSelectionMode = ['single', 'all', 'selected'].includes(raw?.mode) ? raw.mode : 'single';
+    const singleAccountId = ids.includes(Number(raw?.singleAccountId)) ? Number(raw.singleAccountId) : fallback;
+    const selectedAccountIds: number[] = Array.isArray(raw?.selectedAccountIds)
+      ? Array.from(new Set<number>((raw.selectedAccountIds as unknown[]).map((value) => Number(value)).filter((id) => Number.isFinite(id) && ids.includes(id))))
+      : [];
+    return { mode, singleAccountId, selectedAccountIds };
+  } catch {
+    return { mode: 'single', singleAccountId: fallback, selectedAccountIds: [] };
+  }
+}
+
+export function writeCalculatorAccountSelection(selection: CalculatorAccountSelection) {
+  try {
+    localStorage.setItem(CALCULATOR_ACCOUNT_KEY, JSON.stringify(selection));
+  } catch {
+    // Browser storage restrictions should not break trading controls.
+  }
+}
+

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, RefreshCw, X } from 'lucide-react';
 import type { AccountPublic, TradeExecution, TradeOrder, TradePosition } from '@trade/shared';
@@ -18,7 +18,8 @@ type Action =
 export default function TradePage() {
   const qc = useQueryClient();
   const { t, language } = useI18n();
-  const [account, setAccount] = useState(0);
+  const [account, setAccountState] = useState(() => { const value=Number(localStorage.getItem('edgedesk.trade.account.v1')||0); return Number.isFinite(value)?value:0; });
+  const setAccount=(value:number)=>{setAccountState(value);localStorage.setItem('edgedesk.trade.account.v1',String(value));};
   const [symbol, setSymbol] = useState('');
   const [tab, setTab] = useState<Tab>('positions');
   const [action, setAction] = useState<Action>(null);
@@ -31,6 +32,10 @@ export default function TradePage() {
     queryKey: ['config'],
     queryFn: () => api('/api/config'),
   });
+  useEffect(()=>{
+    if(!config.data?.accounts.length)return;
+    if(account!==0&&!config.data.accounts.some((item)=>item.id===account))setAccount(0);
+  },[config.data?.accounts,account]);
   const suffix = account ? `?accountId=${account}` : '';
   const summary = useQuery<any[]>({ queryKey: ['trade-summary', account], queryFn: () => api(`/api/trade/summary${suffix}`), refetchInterval: 10_000 });
   const positions = useQuery<TradePosition[]>({ queryKey: ['positions', account], queryFn: () => api(`/api/trade/positions${suffix}`), refetchInterval: 7_000 });

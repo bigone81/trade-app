@@ -6,18 +6,20 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getExchangeAccount, getJournalImage, getNotificationSettings, listAlerts, listExchangeAccounts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, recordJournalBybitExecution, resolveExchangeAccountRuntime, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
+import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, recordJournalBybitExecution, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { appConfig } from './config.js';
-import { BybitAdapter } from '@trade/exchanges-bybit';
+import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
 
 const app=Fastify({logger:{redact:['req.headers.authorization','*.key','*.secret','*.apiKey','*.apiSecret']}});
 const db=openDatabase(appConfig.databasePath);
 mkdirSync(appConfig.chartsDir,{recursive:true});
 
-const bybit=new BybitAdapter((accountId)=>resolveExchangeAccountRuntime(db,accountId));
-const accounts=()=>listExchangeAccounts(db);
+const runtimeAccounts=discoverBybitAccounts(process.env);
+const runtimeById=new Map(runtimeAccounts.map(account=>[account.id,account]));
+const bybit=new BybitAdapter(createEnvBybitResolver(runtimeAccounts));
+const accounts=()=>runtimeAccounts;
 const publicAccounts=()=>accounts().map(({id,exchange,market,name,environment,demo,configured,enabled})=>({id,exchange,market,name,environment,demo,configured,enabled}));
-const accountById=(id:number)=>{const account=getExchangeAccount(db,id);if(!account)throw new Error(`Unknown exchange account ${id}`);return account;};
+const accountById=(id:number)=>{const account=runtimeById.get(id);if(!account)throw new Error(`Unknown exchange account ${id}. Check .env and recreate the containers.`);return account;};
 const adapterFor=(id:number)=>{const account=accountById(id);if(account.exchange==='bybit')return bybit;throw new Error(`Exchange ${account.exchange} is not supported yet`);};
 
 
@@ -72,7 +74,7 @@ app.post('/api/journal/sync',async(req)=>{
   let ordersSynced=0,executionsSynced=0;
   const details:any[]=[];
   for(const id of ids){
-    const account=getExchangeAccount(db,id);if(!account)continue;
+    const account=runtimeById.get(id);if(!account)continue;
     try{
       const adapter=adapterFor(id);
       const [active,history,executions]=await Promise.all([adapter.getOrders(id,false),adapter.getOrders(id,true),adapter.getExecutions(id)]);
@@ -160,12 +162,20 @@ async function accountIds(value:unknown){
 app.get('/api/trade/summary',async(req)=>{
   const ids=await accountIds((req.query as any)?.accountId);
   return Promise.all(ids.map(async id=>{
-    const account=getExchangeAccount(db,id);
+    const account=runtimeById.get(id);
     try{
       const adapter=adapterFor(id);
       const [balance,positions,orders]=await Promise.all([adapter.getAccountBalance(id),adapter.getPositions(id),adapter.getOrders(id)]);
       return {...balance,exchange:account?.exchange,positions:positions.length,orders:orders.length,unrealisedPnl:positions.reduce((sum,p)=>sum+p.unrealisedPnl,0),online:true};
     }catch(e){return {accountId:id,accountName:account?.name,exchange:account?.exchange,online:false,error:e instanceof Error?e.message:String(e)};}
+  }));
+});
+app.get('/api/trade/balances',async(req)=>{
+  const ids=await accountIds((req.query as any)?.accountId);
+  return Promise.all(ids.map(async id=>{
+    const account=runtimeById.get(id);
+    try{return {...await adapterFor(id).getAccountBalance(id),exchange:account?.exchange,online:true};}
+    catch(e){return {accountId:id,accountName:account?.name,exchange:account?.exchange,online:false,error:e instanceof Error?e.message:String(e)};}
   }));
 });
 app.get('/api/trade/positions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getPositions(id).catch(()=>[])))).flat();});

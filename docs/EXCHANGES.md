@@ -1,36 +1,22 @@
-# Exchange provider boundary
+# Exchanges and accounts
 
-The runtime provider is still Bybit, but exchange-specific code is now isolated behind an adapter.
+EdgeDesk currently runs the Bybit linear adapter through `@trade/exchanges-bybit`.
 
-## Current packages
+## Current personal/testing mode
 
-- `@trade/exchanges-core` — common adapter/account contracts.
-- `@trade/exchanges-bybit` — Bybit REST/WebSocket implementation.
-- `exchange_accounts` — SQLite registry of exchange accounts.
+Exchange accounts are not stored in SQLite. They are discovered only from `.env` at process start using:
 
-Canonical market identity remains `exchange + market + symbol`, for example `bybit:linear:BTCUSDT`.
+`BYBIT_ACCOUNT<N>_NAME`
+`BYBIT_ACCOUNT<N>_KEY`
+`BYBIT_ACCOUNT<N>_SECRET`
+`BYBIT_ACCOUNT<N>_DEMO`
 
-## Account registry
+`<N>` is dynamic and is not limited to 1..5. An account exists in EdgeDesk only when both KEY and SECRET are present. After editing `.env`, recreate the app and worker containers.
 
-`exchange_accounts` is now the source of account metadata used by API and worker. The old fixed TypeScript list of Account 1..5 is gone.
+The old `exchange_accounts` SQLite registry is dropped automatically when the database is opened. Journal rows keep their historical `account_id` and `account_name` values; they do not depend on the registry.
 
-For the current personal/testing deployment, credentials still stay in `.env`. On database open, legacy variables matching `BYBIT_ACCOUNT<N>_{NAME,KEY,SECRET,DEMO}` are discovered dynamically and registered in `exchange_accounts`. `<N>` is not limited to 1..5.
+## Adapter boundary
 
-The table stores only environment-variable references (`api_key_ref`, `api_secret_ref`), not the API secret itself. This keeps the current security model unchanged while removing the fixed five-account architecture.
+API and worker resolve the env account and pass it to `BybitAdapter`. Chart, Journal and Trade Control consume normalized shared types, so Binance / OKX adapters can be added later without changing the UI model.
 
-A future SaaS credential layer can replace `credential_source=env` with encrypted database/KMS credentials without changing Chart, Trade Control, Journal, or the Bybit adapter contract.
-
-## Adapter responsibilities
-
-An exchange adapter owns:
-
-- market data: tickers, candles, instrument rules, public WebSocket
-- accounts: equity / balances
-- trading: positions, active/history orders, executions, place/cancel, position management
-- exchange-specific normalization such as Bybit tick size / qty step
-- private WebSocket construction
-- capability reporting
-
-Bybit-only details such as `positionIdx`, `category=linear`, and Bybit API client construction stay inside `@trade/exchanges-bybit` as much as practical.
-
-No second exchange is enabled yet. Binance/OKX adapters can be added later and selected by the account's `exchange` field.
+For a future SaaS version, a real user-owned `exchange_accounts` table with encrypted credentials can be introduced again behind the same adapter boundary.

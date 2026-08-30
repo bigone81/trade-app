@@ -1,6 +1,6 @@
 import { RestClientV5, WebsocketClient } from 'bybit-api';
 import type { AccountId, ExchangeCapabilities, TradeExecution, TradeOrder, TradePosition } from '@trade/shared';
-import type { ExchangeAccountResolver } from '@trade/exchanges-core';
+import type { ExchangeAccountResolver, ExchangeAccountRuntime } from '@trade/exchanges-core';
 
 const num=(v:unknown)=>{const n=Number(v);return Number.isFinite(n)?n:0};
 const nullable=(v:unknown)=>v===undefined||v===null||v===''?null:num(v);
@@ -10,6 +10,45 @@ const align=(value:number,stepText:string,mode:'round'|'floor'='round')=>{
   const units=mode==='floor'?Math.floor(value/step+1e-10):Math.round(value/step);
   return (units*step).toFixed(decimals(stepText));
 };
+
+
+export function discoverBybitAccounts(env:Record<string,string|undefined>):ExchangeAccountRuntime[]{
+  const slots=new Set<number>();
+  for(const key of Object.keys(env)){
+    const match=/^BYBIT_ACCOUNT(\d+)_(?:NAME|KEY|SECRET|DEMO)$/.exec(key);
+    if(match)slots.add(Number(match[1]));
+  }
+  const accounts:ExchangeAccountRuntime[]=[];
+  for(const id of [...slots].sort((a,b)=>a-b)){
+    const prefix=`BYBIT_ACCOUNT${id}_`;
+    const apiKey=String(env[`${prefix}KEY`]||'').trim();
+    const apiSecret=String(env[`${prefix}SECRET`]||'').trim();
+    if(!apiKey||!apiSecret)continue;
+    const demo=['1','true','yes','on'].includes(String(env[`${prefix}DEMO`]||'').trim().toLowerCase());
+    accounts.push({
+      id,
+      exchange:'bybit',
+      market:'linear',
+      name:String(env[`${prefix}NAME`]||`Account ${id}`).trim()||`Account ${id}`,
+      environment:demo?'demo':'prod',
+      demo,
+      configured:true,
+      enabled:true,
+      apiKey,
+      apiSecret,
+    });
+  }
+  return accounts;
+}
+
+export function createEnvBybitResolver(accounts:ExchangeAccountRuntime[]):ExchangeAccountResolver{
+  const byId=new Map(accounts.map(account=>[account.id,account]));
+  return (accountId)=>{
+    const account=byId.get(accountId);
+    if(!account)throw new Error(`Unknown Bybit account ${accountId}. Check BYBIT_ACCOUNT${accountId}_KEY/SECRET in .env and recreate the containers.`);
+    return account;
+  };
+}
 
 export class BybitAdapter {
   readonly exchange='bybit' as const;

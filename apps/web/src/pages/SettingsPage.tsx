@@ -149,18 +149,28 @@ export default function SettingsPage() {
               </select>
             </div>
           </div>
+          <div className="field">
+            <label>{preferences.language==='uk'?'База для розрахунку ризику':preferences.language==='ru'?'База для расчёта риска':'Risk sizing base'}</label>
+            <select className="select" value={preferences.riskBase} onChange={(e)=>save({...preferences,riskBase:e.target.value as 'equity'|'wallet'|'fixed'})}>
+              <option value="equity">{preferences.language==='uk'?'Equity акаунта':preferences.language==='ru'?'Equity аккаунта':'Account equity'}</option>
+              <option value="wallet">{preferences.language==='uk'?'Wallet balance':preferences.language==='ru'?'Wallet balance':'Wallet balance'}</option>
+              <option value="fixed">{preferences.language==='uk'?'Фіксований розмір акаунта':preferences.language==='ru'?'Фиксированный размер счёта':'Fixed account size'}</option>
+            </select>
+          </div>
           <div className="settings-subtitle">{preferences.language==='uk'?'Ризик окремо для акаунтів':preferences.language==='ru'?'Риск отдельно для аккаунтов':'Risk override by account'}</div>
           {accounts.map((a) => {
             const value = preferences.accountRiskPercent[String(a.id)];
-            return <div className="account-risk-row" key={a.id}>
+            const fixed = preferences.fixedAccountSize[String(a.id)];
+            return <div className="account-risk-row account-risk-row-wide" key={a.id}>
               <span>{a.name}</span>
               <input className="input" type="number" min="0" step="0.05" placeholder={`${preferences.defaultRiskPercent}% ${preferences.language==='uk'?'типово':preferences.language==='ru'?'по умолчанию':'default'}`} value={value ?? ''} onChange={(e) => {
                 const raw = e.target.value;
                 save({ ...preferences, accountRiskPercent: { ...preferences.accountRiskPercent, [String(a.id)]: raw === '' ? null : Math.max(0, Number(raw)) } });
               }} />
+              {preferences.riskBase==='fixed'&&<input className="input" type="number" min="0" step="100" placeholder={preferences.language==='uk'?'Розмір $':preferences.language==='ru'?'Размер $':'Size $'} value={fixed ?? ''} onChange={(e)=>{const raw=e.target.value;save({...preferences,fixedAccountSize:{...preferences.fixedAccountSize,[String(a.id)]:raw===''?null:Math.max(0,Number(raw))}})}}/>}
             </div>;
           })}
-          <p className="muted settings-hint">{t('These are calculator defaults only. You can change risk for an individual trade without changing the default.')}</p>
+          <p className="muted settings-hint">{preferences.language==='uk'?'Вибране значення — типове для калькулятора. У мультиакаунтному ордері ризик і розмір позиції рахуються окремо для кожного акаунта.':preferences.language==='ru'?'Выбранные значения — настройки калькулятора по умолчанию. В мультиаккаунтном ордере риск и размер позиции считаются отдельно для каждого аккаунта.':'These are calculator defaults. Multi-account orders calculate risk and position size separately for every account.'}</p>
         </section>
 
         <section className="card settings-card">
@@ -240,7 +250,7 @@ export default function SettingsPage() {
             ))}
           </div>)}
           {!exchangeGroups.length && <div className="empty">{t('No exchange accounts registered.')}</div>}
-          <div className="exchange-placeholder">{t('Accounts are loaded from the SQLite registry. Binance / OKX adapters can be added later without changing Chart, Journal or Calculator.')}</div>
+          <div className="exchange-placeholder">{preferences.language==='uk'?'Акаунти завантажуються тільки з BYBIT_ACCOUNT<N>_* у .env. Щоб додати або прибрати акаунт, змініть .env і пересоздайте контейнери.':preferences.language==='ru'?'Аккаунты загружаются только из BYBIT_ACCOUNT<N>_* в .env. Чтобы добавить или убрать аккаунт, измените .env и пересоздайте контейнеры.':'Accounts are loaded only from BYBIT_ACCOUNT<N>_* in .env. Add/remove an account by changing .env and recreating the containers.'}</div>
         </section>
 
         <section className="card settings-card notifications-settings-card">

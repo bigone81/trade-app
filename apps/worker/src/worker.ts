@@ -3,18 +3,17 @@ import {
   createNotification,
   getNotificationSettings,
   listAlerts,
-  listExchangeAccounts,
   markNotificationTelegram,
   openDatabase,
-  resolveExchangeAccountRuntime,
   recordJournalBybitExecution,
   syncJournalBybitOrder,
   type NotificationRecord,
 } from '@trade/database';
-import { BybitAdapter } from '@trade/exchanges-bybit';
+import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
 
 const db=openDatabase(process.env.DATABASE_PATH || './data/trade.sqlite');
-const bybit=new BybitAdapter((accountId)=>resolveExchangeAccountRuntime(db,accountId));
+const runtimeAccounts=discoverBybitAccounts(process.env);
+const bybit=new BybitAdapter(createEnvBybitResolver(runtimeAccounts));
 const telegramToken=process.env.TELEGRAM_BOT_TOKEN || '';
 const telegramChatId=process.env.TELEGRAM_CHAT_ID || '';
 const publicUrl=(process.env.PUBLIC_APP_URL || '').replace(/\/$/,'');
@@ -145,7 +144,7 @@ function tradingNotification(id:number,name:string,x:any){
   void deliverTelegram(n,`${icon} <b>${title}</b>\n\nBybit · ${name}\n<b>${symbol}</b> ${side}\n${qty?`${qtyLabel}: ${qty}\n`:''}${avg?`${priceLabel}: ${avg}\n`:''}${statusLabel}: ${status}`,settings.telegramTrading);
 }
 
-for(const account of listExchangeAccounts(db,{exchange:'bybit',enabledOnly:true}).filter(a=>a.configured)){
+for(const account of runtimeAccounts){
   const id=account.id;const name=account.name;
   const ws=bybit.createPrivateWebsocket(id);const connKey=`private:${id}`;const conn={title:`Bybit · ${name}`,accountId:id,accountName:name};
   ws.on('open',()=>{restored(connKey,conn);appendSystemEvent(db,{eventType:'ws.private.open',accountId:id,message:`${name} private WebSocket connected`});});

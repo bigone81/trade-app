@@ -1,7 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { AccountPublic, AlertRecord, ExchangeId, ManualLevel, MarketKind, RiskReward } from '@trade/shared';
+import type { AlertRecord, ManualLevel, RiskReward } from '@trade/shared';
 
 export type SqliteDb = DatabaseSync;
 
@@ -9,23 +9,6 @@ const schema = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
-
-CREATE TABLE IF NOT EXISTS exchange_accounts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  exchange TEXT NOT NULL,
-  market TEXT NOT NULL DEFAULT 'linear',
-  name TEXT NOT NULL,
-  environment TEXT NOT NULL DEFAULT 'prod',
-  enabled INTEGER NOT NULL DEFAULT 1,
-  credential_source TEXT NOT NULL DEFAULT 'env' CHECK(credential_source IN ('env')),
-  api_key_ref TEXT,
-  api_secret_ref TEXT,
-  legacy_slot INTEGER,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_exchange_accounts_legacy_slot ON exchange_accounts(exchange, legacy_slot) WHERE legacy_slot IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_exchange_accounts_enabled ON exchange_accounts(enabled, exchange);
 
 CREATE TABLE IF NOT EXISTS manual_levels (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,7 +185,7 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/trade.s
   db.exec("UPDATE journal_orders SET updated_at=COALESCE(updated_at,created_at,CURRENT_TIMESTAMP) WHERE updated_at IS NULL");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_exchange_order ON journal_orders(exchange,account_id,exchange_order_id) WHERE exchange_order_id IS NOT NULL AND exchange_order_id<>''");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_order_link ON journal_orders(exchange,account_id,order_link_id) WHERE order_link_id IS NOT NULL AND order_link_id<>''");
-  seedLegacyExchangeAccounts(db);
+  db.exec("DROP TABLE IF EXISTS exchange_accounts");
   return db;
 }
 
@@ -574,72 +557,4 @@ export function updateJournalOrder(db:SqliteDb,id:number,input:{rr?:number;style
   db.prepare(`UPDATE journal_orders SET rr=?,style=?,status=?,note=?,setup=?,tags_json=?,execution_quality=?,exit_price=?,pnl=?,fees=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
     .run(input.rr??current.rr,input.style??current.style,input.status??current.status,input.note===undefined?current.note:input.note,input.setup===undefined?current.setup:input.setup,tagsJson,input.executionQuality===undefined?current.execution_quality:input.executionQuality,input.exitPrice===undefined?current.exit_price:input.exitPrice,input.pnl===undefined?current.pnl:input.pnl,input.fees===undefined?current.fees:input.fees,id);
   return db.prepare('SELECT * FROM journal_orders WHERE id=?').get(id);
-}
-
-
-export type ExchangeAccountRecord = AccountPublic & {
-  environment:string;
-  credentialSource:'env';
-  apiKeyRef:string|null;
-  apiSecretRef:string|null;
-  legacySlot:number|null;
-  createdAt:string;
-  updatedAt:string;
-};
-
-const mapExchangeAccount=(r:any,env:NodeJS.ProcessEnv=process.env):ExchangeAccountRecord=>{
-  const keyRef=r.api_key_ref?String(r.api_key_ref):null;
-  const secretRef=r.api_secret_ref?String(r.api_secret_ref):null;
-  const configured=Boolean(keyRef&&secretRef&&env[keyRef]&&env[secretRef]);
-  return {
-    id:Number(r.id),exchange:String(r.exchange) as ExchangeId,market:String(r.market) as MarketKind,name:String(r.name),
-    demo:String(r.environment)==='demo',configured,enabled:Boolean(Number(r.enabled)),environment:String(r.environment||'prod'),
-    credentialSource:'env',apiKeyRef:keyRef,apiSecretRef:secretRef,legacySlot:r.legacy_slot===null?null:Number(r.legacy_slot),createdAt:String(r.created_at),updatedAt:String(r.updated_at),
-  };
-};
-
-export function seedLegacyExchangeAccounts(db:SqliteDb,env:NodeJS.ProcessEnv=process.env){
-  const slots=new Set<number>();
-  for(const key of Object.keys(env)){
-    const match=/^BYBIT_ACCOUNT(\d+)_(?:NAME|KEY|SECRET|DEMO)$/.exec(key);
-    if(match)slots.add(Number(match[1]));
-  }
-  for(const slot of [...slots].sort((a,b)=>a-b)){
-    const prefix=`BYBIT_ACCOUNT${slot}_`;
-    const keyRef=`${prefix}KEY`,secretRef=`${prefix}SECRET`;
-    const hasAny=[`${prefix}NAME`,keyRef,secretRef,`${prefix}DEMO`].some(k=>env[k]!==undefined&&env[k]!=='');
-    if(!hasAny)continue;
-    const name=env[`${prefix}NAME`]||`Account ${slot}`;
-    const demo=['1','true','yes','on'].includes(String(env[`${prefix}DEMO`]||'').toLowerCase());
-    const values=[name,demo?'demo':'prod',keyRef,secretRef,slot] as const;
-    // First try to preserve the old slot as the row id. INSERT OR IGNORE makes app+worker startup race-safe.
-    db.prepare(`INSERT OR IGNORE INTO exchange_accounts(id,exchange,market,name,environment,enabled,credential_source,api_key_ref,api_secret_ref,legacy_slot)
-      VALUES(?,'bybit','linear',?,?,1,'env',?,?,?)`).run(slot,...values);
-    // If that id was already occupied by another account, create a normal autoincrement row for this legacy slot.
-    db.prepare(`INSERT OR IGNORE INTO exchange_accounts(exchange,market,name,environment,enabled,credential_source,api_key_ref,api_secret_ref,legacy_slot)
-      VALUES('bybit','linear',?,?,1,'env',?,?,?)`).run(...values);
-    db.prepare(`UPDATE exchange_accounts SET name=?,market='linear',environment=?,enabled=1,credential_source='env',api_key_ref=?,api_secret_ref=?,updated_at=CURRENT_TIMESTAMP
-      WHERE exchange='bybit' AND legacy_slot=?`).run(...values);
-  }
-}
-
-export function listExchangeAccounts(db:SqliteDb,input:{exchange?:string;enabledOnly?:boolean}={},env:NodeJS.ProcessEnv=process.env):ExchangeAccountRecord[]{
-  const clauses:string[]=[];const params:any[]=[];
-  if(input.exchange){clauses.push('exchange=?');params.push(input.exchange);}
-  if(input.enabledOnly){clauses.push('enabled=1');}
-  const where=clauses.length?`WHERE ${clauses.join(' AND ')}`:'';
-  return (db.prepare(`SELECT * FROM exchange_accounts ${where} ORDER BY id`).all(...params) as any[]).map(r=>mapExchangeAccount(r,env));
-}
-
-export function getExchangeAccount(db:SqliteDb,id:number,env:NodeJS.ProcessEnv=process.env):ExchangeAccountRecord|null{
-  const row=db.prepare('SELECT * FROM exchange_accounts WHERE id=?').get(id) as any;
-  return row?mapExchangeAccount(row,env):null;
-}
-
-export function resolveExchangeAccountRuntime(db:SqliteDb,id:number,env:NodeJS.ProcessEnv=process.env){
-  const account=getExchangeAccount(db,id,env);
-  if(!account)throw new Error(`Unknown exchange account ${id}`);
-  const apiKey=account.apiKeyRef?String(env[account.apiKeyRef]||''):'';
-  const apiSecret=account.apiSecretRef?String(env[account.apiSecretRef]||''):'';
-  return {...account,apiKey,apiSecret};
 }
