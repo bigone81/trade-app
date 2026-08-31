@@ -8,17 +8,12 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import type {
-  AlertRecord,
   AutoLevel,
   Candle,
   ManualLevel,
   RiskReward,
-  TradeOrder,
-  TradePosition,
-  TradingOverlayLine,
 } from '@trade/shared';
 import { api } from './api';
-import { buildTradingOverlayLines } from './tradeGrouping';
 import { resolvedTheme, type AppPreferences } from './preferences';
 
 export type SnapshotTrade = {
@@ -117,15 +112,12 @@ async function buildOne(trade:SnapshotTrade,preferences:AppPreferences,spec:Snap
   const symbol=trade.symbol.toUpperCase();const occurred=Math.floor(new Date(trade.occurred_at).getTime()/1000);if(!Number.isFinite(occurred))throw new Error('Invalid journal trade date');
   const step=timeframeSeconds(spec.interval);const endMs=Math.min(Date.now(),(occurred+spec.after*step)*1000);
   const qSymbol=encodeURIComponent(symbol);
-  const [candles,levels,manual,riskRewards,alerts,instrument,orders,positions]=await Promise.all([
+  const [candles,levels,manual,riskRewards,instrument]=await Promise.all([
     api<Candle[]>(`/api/market/candles?symbol=${qSymbol}&interval=${spec.interval}&limit=${spec.limit}&end=${Math.floor(endMs)}`),
     api<{limitLevels:AutoLevel[];mirrorLevels:AutoLevel[]}>(`/api/market/levels?symbol=${qSymbol}&interval=D&end=${Math.floor(Math.min(Date.now(),(occurred+86400)*1000))}`),
     api<ManualLevel[]>(`/api/drawings/levels?symbol=${qSymbol}`),
     api<RiskReward[]>(`/api/drawings/risk-rewards?symbol=${qSymbol}`),
-    api<AlertRecord[]>(`/api/alerts?symbol=${qSymbol}`),
     api<{tickSize:string|null}>(`/api/market/instrument?symbol=${qSymbol}`),
-    api<TradeOrder[]>('/api/trade/orders').catch(()=>[]),
-    api<TradePosition[]>('/api/trade/positions').catch(()=>[]),
   ]);
   if(!candles.length)throw new Error(`No ${spec.label} candles returned for ${symbol}`);
 
@@ -138,21 +130,15 @@ async function buildOne(trade:SnapshotTrade,preferences:AppPreferences,spec:Snap
   const auto=[...(levels.limitLevels||[]),...(levels.mirrorLevels||[])];
   for(const level of auto)series.createPriceLine({price:level.price,color:level.type==='mirror'?'#7387ff':level.type==='support'?'#3a9b79':'#b85b6c',lineWidth:1,lineStyle:LineStyle.Dashed,axisLabelVisible:true,title:`${level.type} · ${level.touches}`});
   for(const level of manual){const autoColor=light?'#1f2937':'#e5e7eb';const color=preferences.manualLevel.colorMode==='auto'?autoColor:preferences.manualLevel.color;series.createPriceLine({price:level.price,color:rgba(color,preferences.manualLevel.opacity),lineWidth:preferences.manualLevel.width,lineStyle:lineStyle(preferences.manualLevel.style),axisLabelVisible:preferences.manualLevel.showPriceLabel,title:level.label||'Manual'});}
-  for(const alert of alerts.filter(a=>a.active))series.createPriceLine({price:alert.price,color:'#e1b84e',lineWidth:1,lineStyle:LineStyle.Dashed,axisLabelVisible:true,title:'🔔'});
-
-  const currentLines:TradingOverlayLine[]=buildTradingOverlayLines(symbol,orders,positions);
-  const overlay=preferences.tradingOverlays;const accountAllowed=(id:number)=>overlay.accountIds.length===0||overlay.accountIds.includes(id);
-  const kindVisible=(kind:TradingOverlayLine['kind'])=>kind==='order'?overlay.showOrders:kind==='position'?overlay.showPositions:kind==='sl'?overlay.showStopLoss:kind==='tp'?overlay.showTakeProfit:overlay.showLiquidation;
-  for(const line of currentLines.filter(x=>accountAllowed(x.accountId)&&kindVisible(x.kind))){const color=line.kind==='order'?'#4da3ff':line.kind==='position'?(light?'#263244':'#e6edf7'):line.kind==='sl'?'#ef6675':line.kind==='tp'?'#31c48d':'#b783ff';series.createPriceLine({price:line.price,color:rgba(color,overlay.opacity),lineWidth:overlay.lineWidth,lineStyle:lineStyle((line.kind==='order'?overlay.orderStyle:line.kind==='position'?overlay.positionStyle:line.kind==='sl'?overlay.stopStyle:line.kind==='tp'?overlay.targetStyle:'dotted') as any),axisLabelVisible:true,title:`${line.accountName} · ${line.kind.toUpperCase()}`});}
-
-  const account=trade.legacy_account||`Account ${trade.account_id??'—'}`;const own=(price:number|null|undefined,title:string,color:string,style=LineStyle.Solid)=>{if(Number(price)>0)series.createPriceLine({price:Number(price),color,lineWidth:2,lineStyle:style,axisLabelVisible:true,title:`${account} · ${title}`});};
+  const account=trade.legacy_account||`Account ${trade.account_id??'—'}`;const own=(price:number|null|undefined,title:string,color:string,style=LineStyle.Solid)=>{if(Number(price)>0)series.createPriceLine({price:Number(price),color,lineWidth:2,lineStyle:style,axisLabelVisible:true,title});};
   own(trade.entry_price,trade.status===0?'ORDER':'ENTRY','#4da3ff');own(trade.stop_loss,'SL','#ef6675',LineStyle.Dashed);own(trade.take_profit,'TP','#31c48d',LineStyle.Dashed);own(trade.exit_price,'EXIT','#b783ff',LineStyle.Dotted);
 
   const tradeIndex=nearestIndex(candles,occurred);const from=Math.max(0,tradeIndex-spec.before);const to=Math.min(candles.length-1+8,tradeIndex+spec.after);(chart.timeScale() as any).setVisibleLogicalRange({from,to});
   await waitPaint();
   const shot=chart.takeScreenshot();const out=document.createElement('canvas');out.width=shot.width;out.height=shot.height;const ctx=out.getContext('2d');if(!ctx)throw new Error('Canvas is unavailable');ctx.drawImage(shot,0,0);
-  drawRiskRewards(ctx,chart,series,candles,riskRewards,step,shot.width/width,shot.height/height);
-  const scaleX=shot.width/width,scaleY=shot.height/height;ctx.save();ctx.scale(scaleX,scaleY);ctx.fillStyle=light?'rgba(255,255,255,.88)':'rgba(10,15,22,.88)';ctx.fillRect(12,10,360,48);ctx.fillStyle=light?'#111827':'#e6edf7';ctx.font='600 16px sans-serif';ctx.fillText(`${symbol} · ${spec.label}`,22,30);ctx.font='12px sans-serif';ctx.fillStyle=light?'#526071':'#93a4b8';ctx.fillText(new Date(trade.occurred_at).toLocaleString(),22,49);ctx.restore();
+  const visibleStart=candles[Math.max(0,from)]?.time??candles[0]!.time;const visibleEnd=candles[Math.min(candles.length-1,Math.floor(to))]?.time??candles.at(-1)!.time;const visibleRiskRewards=riskRewards.filter(item=>Math.max(item.startTime,item.endTime)>=visibleStart-step*2&&Math.min(item.startTime,item.endTime)<=visibleEnd+step*2);
+  drawRiskRewards(ctx,chart,series,candles,visibleRiskRewards,step,shot.width/width,shot.height/height);
+  const scaleX=shot.width/width,scaleY=shot.height/height;ctx.save();ctx.scale(scaleX,scaleY);ctx.fillStyle=light?'rgba(255,255,255,.88)':'rgba(10,15,22,.88)';ctx.fillRect(12,10,360,48);ctx.fillStyle=light?'#111827':'#e6edf7';ctx.font='600 16px sans-serif';ctx.fillText(`${symbol} · ${spec.label}`,22,30);ctx.font='12px sans-serif';ctx.fillStyle=light?'#526071':'#93a4b8';ctx.fillText(`${new Date(trade.occurred_at).toLocaleString()} · ${account}`,22,49);ctx.restore();
   chart.remove();host.remove();
   return canvasToFile(out,`auto-chart-${spec.label.toLowerCase()}-${symbol}-${trade.id}.png`);
 }
