@@ -89,3 +89,34 @@ html[data-theme="light"] .chart-overlay-popover{background:#fff;border-color:#d3
 .trading-edge-label::after,.execution-hover-target::after{content:attr(data-tooltip);position:absolute;z-index:120;display:block;min-width:185px;max-width:300px;padding:8px 9px;border:1px solid #314055;border-radius:7px;background:#0c131d;color:#dce6f2;box-shadow:0 10px 30px #000c;font-size:10px;font-weight:600;line-height:1.45;white-space:pre-line;text-align:left;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .08s;letter-spacing:0}.trading-edge-label::after{right:0;top:calc(100% + 5px)}.trading-edge-label.tooltip-up::after{top:auto;bottom:calc(100% + 5px)}.trading-edge-label:hover::after,.execution-hover-target:hover::after{opacity:1;visibility:visible}html[data-theme="light"] .trading-edge-label::after,html[data-theme="light"] .execution-hover-target::after{background:#fff;color:#263548;border-color:#cbd6e2;box-shadow:0 10px 28px #52607138}
 
 .execution-hover-layer{position:absolute;inset:0;z-index:10;pointer-events:none;overflow:visible}.execution-hover-target{position:absolute;width:24px;height:24px;transform:translate(-50%,-50%);border-radius:50%;pointer-events:auto;cursor:help;background:transparent}.execution-hover-target::after{left:14px;top:14px}.execution-hover-target.tooltip-up::after{top:auto;bottom:14px}.execution-hover-target.tooltip-left::after{left:auto;right:14px}.execution-hover-target.buy:hover{box-shadow:0 0 0 1px #31c48d66}.execution-hover-target.sell:hover{box-shadow:0 0 0 1px #ef667566}
+
+/* EdgeDesk v15.4 — fill the desktop viewport without magic height offsets */
+@media(min-width:951px){
+  .chart-page{
+    height:100dvh;
+    min-height:0;
+    padding-bottom:10px;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
+  .chart-page>.page-head,
+  .chart-page>.toolbar,
+  .chart-page>.inline-error{
+    flex:0 0 auto;
+  }
+  .chart-page>.chart-scanner-layout{
+    flex:1 1 auto;
+    min-height:0;
+  }
+  .chart-scanner-layout .chart-card,
+  .chart-scanner-layout .market-panel{
+    height:100%;
+    min-height:0;
+    max-height:none;
+  }
+  .chart-scanner-layout .chart-host{
+    height:100%;
+    min-height:0;
+  }
+}
