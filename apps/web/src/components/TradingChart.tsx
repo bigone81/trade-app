@@ -1333,6 +1333,7 @@ export default function TradingChart(p: Props) {
         series={series}
         host={hostRef.current}
         candles={timelineCandles}
+        timeframe={p.timeframe}
         items={p.riskRewards}
         selectedId={p.selectedRiskReward?.id ?? null}
         onSelect={p.onSelectRiskReward}
