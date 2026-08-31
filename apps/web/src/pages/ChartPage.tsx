@@ -91,8 +91,8 @@ export default function ChartPage() {
     limitLevels: AutoLevel[];
     mirrorLevels: AutoLevel[];
   }>({
-    queryKey: ['levels', ui.symbol, preferences.autoLevels.lookbackDays],
-    queryFn: () => api(`/api/market/levels?symbol=${ui.symbol}&days=${preferences.autoLevels.lookbackDays}`),
+    queryKey: ['levels', ui.symbol],
+    queryFn: () => api(`/api/market/levels?symbol=${ui.symbol}&interval=D`),
   });
 
   const manual = useQuery<ManualLevel[]>({
