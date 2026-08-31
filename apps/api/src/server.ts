@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
+import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, recordJournalBybitExecution, setAlertActive, syncJournalBybitOrder, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { appConfig } from './config.js';
 import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
 
@@ -67,6 +67,27 @@ app.get('/api/journal/page',async(req)=>{
   return listJournalPage(db,q);
 });
 app.patch('/api/journal/:id',async(req,reply)=>{const id=z.coerce.number().int().positive().parse((req.params as any).id);const b=z.object({rr:z.number().min(-100).max(100).optional(),style:z.number().int().min(0).max(99).optional(),status:z.number().int().min(0).max(99).optional(),note:z.string().max(20000).nullable().optional(),setup:z.string().max(200).nullable().optional(),tags:z.array(z.string().max(80)).max(30).optional(),executionQuality:z.string().max(80).nullable().optional(),exitPrice:z.number().min(0).nullable().optional(),pnl:z.number().nullable().optional(),fees:z.number().min(0).nullable().optional()}).parse(req.body);const row=updateJournalOrder(db,id,b);if(!row)return reply.code(404).send({error:'Not found'});return row;});
+
+app.post('/api/journal/sync',async(req)=>{
+  const q=z.object({accountId:z.coerce.number().int().positive().optional()}).parse(req.query);
+  const ids=q.accountId?[q.accountId]:accounts().filter(a=>a.enabled&&a.configured).map(a=>a.id);
+  let ordersSynced=0,executionsSynced=0;
+  const details:any[]=[];
+  for(const id of ids){
+    const account=runtimeById.get(id);if(!account)continue;
+    try{
+      const adapter=adapterFor(id);
+      const [active,history,executions]=await Promise.all([adapter.getOrders(id,false),adapter.getOrders(id,true),adapter.getExecutions(id)]);
+      const byId=new Map<string,any>();for(const o of [...history,...active])if(o.orderId)byId.set(o.orderId,o);
+      const appOrders=[...byId.values()].filter(o=>String(o.orderLinkId||'').startsWith('tradev2-')&&!o.reduceOnly);
+      for(const o of appOrders){syncJournalBybitOrder(db,{accountId:id,accountName:account.name,order:o});ordersSynced++;}
+      const allowed=new Set(appOrders.map(o=>o.orderId));
+      for(const x of executions){if(!allowed.has(x.orderId))continue;recordJournalBybitExecution(db,{accountId:id,accountName:account.name,execution:x});executionsSynced++;}
+      details.push({accountId:id,accountName:account.name,exchange:account.exchange,ok:true,orders:appOrders.length,executions:executions.filter(x=>allowed.has(x.orderId)).length});
+    }catch(e){details.push({accountId:id,accountName:account.name,exchange:account.exchange,ok:false,error:e instanceof Error?e.message:String(e)});}
+  }
+  return {ok:true,ordersSynced,executionsSynced,details};
+});
 
 const journalImageKinds=['before','entry','management','exit','other'] as const;
 const journalImageExt=(buffer:Buffer,mime:string)=>{

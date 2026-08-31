@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Camera, ClipboardPaste, Image as ImageIcon, Trash2, UploadCloud, X } from 'lucide-react';
+import { Camera, ClipboardPaste, Image as ImageIcon, RefreshCw, Trash2, UploadCloud, X } from 'lucide-react';
 import type { AccountPublic } from '@trade/shared';
 import { api, json, money, num } from '../api';
 import { useI18n } from '../i18n';
@@ -59,6 +59,7 @@ export default function JournalPage(){
   const uploadOne=async(id:number,file:File,kind:JournalImage['kind'])=>{if(!['image/png','image/jpeg','image/webp'].includes(file.type))throw new Error('Only PNG, JPEG and WEBP images are allowed');if(file.size>8*1024*1024)throw new Error(`${file.name} is larger than 8 MB`);const dataBase64=await fileToBase64(file);return api(`/api/journal/${id}/images`,json('POST',{kind,name:file.name,mime:file.type,dataBase64}));};
   const uploadImages=useMutation({mutationFn:async({files,kind}:{files:File[];kind:JournalImage['kind']})=>{if(!selected)throw new Error('Select a journal trade first');for(const file of files)await uploadOne(selected.id,file,kind);},onSuccess:()=>{void qc.invalidateQueries({queryKey:['journal-images',selected?.id]});void qc.invalidateQueries({queryKey:['journal-page']});}});
   const deleteImage=useMutation({mutationFn:(id:number)=>api(`/api/journal/images/${id}`,{method:'DELETE'}),onSuccess:()=>{void qc.invalidateQueries({queryKey:['journal-images',selected?.id]});void qc.invalidateQueries({queryKey:['journal-page']});}});
+  const syncJournal=useMutation({mutationFn:()=>api('/api/journal/sync',{method:'POST'}),onSuccess:()=>void qc.invalidateQueries({queryKey:['journal-page']})});
   const generateSnapshots=useMutation({mutationFn:async()=>{if(!selected)throw new Error('Select a journal trade first');const intervals:SnapshotInterval[]=[];if(preferences.journal.snapshot5m)intervals.push('5');if(preferences.journal.snapshot1h)intervals.push('60');if(preferences.journal.snapshot1d)intervals.push('D');if(!intervals.length)throw new Error('Enable at least one Journal snapshot timeframe in Settings');const files=await createJournalChartSnapshots(selected,preferences,intervals);const prefixes=files.map(file=>file.name.split(selected.symbol.toUpperCase())[0]||'');for(const old of images.data||[]){const name=old.original_name||'';if(prefixes.some(prefix=>prefix&&name.startsWith(prefix)))await api(`/api/journal/images/${old.id}`,{method:'DELETE'});}for(const file of files)await uploadOne(selected.id,file,'entry');return files.length;},onSuccess:()=>{void qc.invalidateQueries({queryKey:['journal-images',selected?.id]});void qc.invalidateQueries({queryKey:['journal-page']});}});
 
   const accountNames=useMemo(()=>Object.fromEntries((config.data?.accounts||[]).map(a=>[a.id,a.name])),[config.data]);
@@ -95,7 +96,7 @@ export default function JournalPage(){
   const sortLabel=(value:SortMode)=>value==='newest'?(language==='uk'?'Нові спочатку':language==='ru'?'Сначала новые':'Newest first'):value==='oldest'?(language==='uk'?'Старі спочатку':language==='ru'?'Сначала старые':'Oldest first'):value==='best_r'?(language==='uk'?'Найкращий R':language==='ru'?'Лучший R':'Best R'):value==='worst_r'?(language==='uk'?'Найгірший R':language==='ru'?'Худший R':'Worst R'):(language==='uk'?'Найбільший PnL':language==='ru'?'Максимальный PnL':'Highest PnL');
 
   return <div className="page journal-page">
-    <div className="page-head"><div><h1>{t('Journal')}</h1><p>{language==='uk'?'Торговий щоденник, розбір і аналітика в R. Результат R заповнюється вручну.':language==='ru'?'Торговый дневник, разбор и аналитика в R. Результат R заполняется вручную.':'Trading diary, review and R-based analytics. Result R is entered manually.'}</p></div></div>
+    <div className="page-head"><div><h1>{t('Journal')}</h1><p>{language==='uk'?'Торговий щоденник, розбір і аналітика в R. Результат R заповнюється вручну.':language==='ru'?'Торговый дневник, разбор и аналитика в R. Результат R заполняется вручную.':'Trading diary, review and R-based analytics. Result R is entered manually.'}</p></div><button className="btn secondary" disabled={syncJournal.isPending} onClick={()=>syncJournal.mutate()}><RefreshCw size={14}/>{syncJournal.isPending?(language==='uk'?'Синхронізація…':language==='ru'?'Синхронизация…':'Syncing…'):'Sync Bybit'}</button></div>
 
     <div className="journal-tabs"><button className={filters.tab==='trades'?'tab active':'tab'} onClick={()=>setFilter('tab','trades')}>{t('Trades')}</button><button className={filters.tab==='analytics'?'tab active':'tab'} onClick={()=>setFilter('tab','analytics')}>{t('Analytics')}</button></div>
     <div className="card journal-filterbar">
