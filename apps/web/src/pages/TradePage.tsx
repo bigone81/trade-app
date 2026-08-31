@@ -107,12 +107,21 @@ export default function TradePage() {
     ['history', 'History', history.data?.length || 0],
   ];
 
+  const closeAllLabel = language === 'uk' ? 'Закрити все' : language === 'ru' ? 'Закрыть всё' : 'Close all';
+  const emergencyCloseTitle = (position: TradePosition) => language === 'uk'
+    ? `Аварійне закриття ${position.symbol}`
+    : language === 'ru'
+      ? `Экстренное закрытие ${position.symbol}`
+      : `Emergency close ${position.symbol}`;
+
   const actionBody = useMemo(() => {
     if (!action) return null;
     if (action.kind === 'cancel') return <>{language==='uk'?'Скасувати':language==='ru'?'Отменить':'Cancel'} <b>{action.order.symbol}</b> {language==='uk'?'ордер':language==='ru'?'ордер':'order'}{action.childOrderIds.length ? <> {language==='uk'?'разом із':language==='ru'?'вместе с':'together with'} <b>{action.childOrderIds.length} SL/TP</b></> : null}?</>;
     if (action.kind === 'cancelAll') return <>{language==='uk'?'Скасувати всі ордери по':language==='ru'?'Отменить все ордера по':'Cancel all orders for'} <b>{action.symbol}</b> {language==='uk'?'на акаунті':language==='ru'?'на аккаунте':'on'} <b>{action.accountName}</b>?</>;
     if (action.kind === 'close') return <>{language==='uk'?'Закрити':language==='ru'?'Закрыть':'Close'} <b>{action.percent}%</b> {language==='uk'?'позиції':language==='ru'?'позиции':'of'} <b>{action.position.symbol} {t(action.position.side)}</b> Market reduce-only?</>;
-    return <>{language==='uk'?'Скасувати всі ордери та повністю закрити':language==='ru'?'Отменить все ордера и полностью закрыть':'Cancel all orders and close the entire'} <b>{action.position.symbol} {t(action.position.side)}</b> Market?</>;
+    if (language === 'uk') return <>Скасувати всі ордери та повністю закрити позицію <b>{action.position.symbol}</b> ({t(action.position.side)}) ринковим ордером?</>;
+    if (language === 'ru') return <>Отменить все ордера и полностью закрыть позицию <b>{action.position.symbol}</b> ({t(action.position.side)}) рыночным ордером?</>;
+    return <>Cancel all orders and fully close the <b>{action.position.symbol}</b> ({t(action.position.side)}) position with a market order?</>;
   }, [action, language, t]);
 
   return (
@@ -147,7 +156,7 @@ export default function TradePage() {
         {tab === 'positions' && <table className="data-table"><thead><tr><th>{t('Account')}</th><th>{t('Symbol')}</th><th>{t('Side')}</th><th>{t('Size')}</th><th>{t('Entry')}</th><th>{t('Mark')}</th><th>{t('uPnL')}</th><th>{t('SL')}</th><th>{t('TP')}</th><th>{t('Liq')}</th><th>{t('Actions')}</th></tr></thead><tbody>
           {filter(positions.data).map((p) => <tr key={`${p.accountId}-${p.symbol}-${p.positionIdx}`} onClick={() => { setSelected(p); setSl(String(p.stopLoss || '')); setTp(String(p.takeProfit || '')); setTrailing(String(p.trailingStop || '')); }}>
             <td>{p.accountName}</td><td><b>{p.symbol}</b></td><td className={p.side === 'Buy' ? 'positive' : 'negative'}>{t(p.side)}</td><td>{num(p.size, 6)}</td><td>{num(p.avgPrice, 6)}</td><td>{num(p.markPrice, 6)}</td><td className={p.unrealisedPnl >= 0 ? 'positive' : 'negative'}>{money(p.unrealisedPnl)}</td><td>{p.stopLoss ? num(p.stopLoss, 6) : '—'}</td><td>{p.takeProfit ? num(p.takeProfit, 6) : '—'}</td><td>{p.liqPrice ? num(p.liqPrice, 6) : '—'}</td>
-            <td><div className="row-actions" onClick={(e) => e.stopPropagation()}><button className="mini-btn" disabled={!live} onClick={() => setAction({ kind: 'close', position: p, percent: 25 })}>25%</button><button className="mini-btn" disabled={!live} onClick={() => setAction({ kind: 'close', position: p, percent: 50 })}>50%</button><button className="mini-btn danger" disabled={!live} onClick={() => setAction({ kind: 'close', position: p, percent: 100 })}>{t('Close')}</button><button className="mini-btn danger" disabled={!live} onClick={() => setAction({ kind: 'flatten', position: p })}>{t('Close all for {symbol}', { symbol: p.symbol })}</button></div></td>
+            <td><div className="row-actions" onClick={(e) => e.stopPropagation()}><button className="mini-btn" disabled={!live} onClick={() => setAction({ kind: 'close', position: p, percent: 25 })}>25%</button><button className="mini-btn" disabled={!live} onClick={() => setAction({ kind: 'close', position: p, percent: 50 })}>50%</button><button className="mini-btn danger" disabled={!live} onClick={() => setAction({ kind: 'close', position: p, percent: 100 })}>{t('Close')}</button><button className="mini-btn danger" disabled={!live} onClick={() => setAction({ kind: 'flatten', position: p })}>{closeAllLabel}</button></div></td>
           </tr>)}
         </tbody></table>}
 
@@ -174,17 +183,17 @@ export default function TradePage() {
         <div className="drawer-head"><div><h2>{selected.symbol} {t(selected.side)}</h2><div className="muted">{selected.accountName} · {language==='uk'?'розмір':language==='ru'?'размер':'size'} {num(selected.size, 6)}</div></div><button className="icon-btn" onClick={() => setSelected(null)}><X size={16} /></button></div>
         <div className="metric-grid"><div className="metric"><small>{t('Entry')}</small><strong>{num(selected.avgPrice, 6)}</strong></div><div className="metric"><small>{t('Mark')}</small><strong>{num(selected.markPrice, 6)}</strong></div><div className="metric"><small>uPnL</small><strong className={selected.unrealisedPnl >= 0 ? 'positive' : 'negative'}>{money(selected.unrealisedPnl)}</strong></div><div className="metric"><small>{t('Liquidation')}</small><strong>{selected.liqPrice ? num(selected.liqPrice, 6) : '—'}</strong></div></div>
         <div className="drawer-section"><div className="field"><label>{t('Stop Loss')}</label><input className="input" type="number" step="any" value={sl} onChange={(e) => setSl(e.target.value)} /></div><div className="field"><label>{t('Take Profit')}</label><input className="input" type="number" step="any" value={tp} onChange={(e) => setTp(e.target.value)} /></div><div className="field"><label>{t('Trailing Stop distance')}</label><input className="input" type="number" step="any" value={trailing} onChange={(e) => setTrailing(e.target.value)} /></div><div className="drawer-actions"><button className="btn secondary" disabled={!live || updateStops.isPending} onClick={() => updateStops.mutate({})}>{t('Update SL / TP / Trail')}</button><button className="btn secondary" disabled={!live || updateStops.isPending} onClick={() => updateStops.mutate({ stopLoss: selected.avgPrice })}>{t('Move SL to breakeven')}</button><button className="btn ghost" onClick={() => { location.href = `/?symbol=${encodeURIComponent(selected.symbol)}`; }}>{t('Open on chart')}</button></div></div>
-        <div className="drawer-section"><h3 style={{ fontSize: 12 }}><AlertTriangle size={14} /> {t('Emergency')}</h3><div className="drawer-actions"><button className="btn warning" disabled={!live} onClick={() => setAction({ kind: 'close', position: selected, percent: 50 })}>{t('Close 50%')}</button><button className="btn danger" disabled={!live} onClick={() => setAction({ kind: 'close', position: selected, percent: 100 })}>{t('Force close 100%')}</button><button className="btn danger" disabled={!live} onClick={() => setAction({ kind: 'flatten', position: selected })}>{t('Close all for {symbol}', { symbol: selected.symbol })}</button></div></div>
+        <div className="drawer-section"><h3 style={{ fontSize: 12 }}><AlertTriangle size={14} /> {t('Emergency')}</h3><div className="drawer-actions"><button className="btn warning" disabled={!live} onClick={() => setAction({ kind: 'close', position: selected, percent: 50 })}>{t('Close 50%')}</button><button className="btn danger" disabled={!live} onClick={() => setAction({ kind: 'close', position: selected, percent: 100 })}>{t('Force close 100%')}</button><button className="btn danger" disabled={!live} onClick={() => setAction({ kind: 'flatten', position: selected })}>{closeAllLabel}</button></div></div>
       </aside>}
 
       <ConfirmDialog
         open={Boolean(action)}
-        title={action?.kind === 'flatten' ? t('Emergency flatten') : action?.kind === 'close' ? t('Close position') : action?.kind === 'cancelAll' ? (language==='uk'?`Скасувати всі по ${action.symbol}`:language==='ru'?`Отменить все по ${action.symbol}`:`Cancel all for ${action.symbol}`) : t('Cancel order')}
+        title={action?.kind === 'flatten' ? emergencyCloseTitle(action.position) : action?.kind === 'close' ? t('Close position') : action?.kind === 'cancelAll' ? (language==='uk'?`Скасувати всі по ${action.symbol}`:language==='ru'?`Отменить все по ${action.symbol}`:`Cancel all for ${action.symbol}`) : t('Cancel order')}
         body={actionBody}
         danger
         onClose={() => setAction(null)}
         onConfirm={() => { if (action) run.mutate(action); }}
-        confirmLabel={action?.kind === 'flatten' ? t('FLATTEN NOW') : action?.kind === 'close' ? t('Close position') : action?.kind === 'cancelAll' ? (language==='uk'?`Скасувати всі по ${action.symbol}`:language==='ru'?`Отменить все по ${action.symbol}`:`Cancel all for ${action.symbol}`) : t('Cancel order')}
+        confirmLabel={action?.kind === 'flatten' ? closeAllLabel : action?.kind === 'close' ? t('Close position') : action?.kind === 'cancelAll' ? (language==='uk'?`Скасувати всі по ${action.symbol}`:language==='ru'?`Отменить все по ${action.symbol}`:`Cancel all for ${action.symbol}`) : t('Cancel order')}
       />
     </div>
   );
