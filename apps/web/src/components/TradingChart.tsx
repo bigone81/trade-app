@@ -1252,17 +1252,18 @@ export default function TradingChart(p: Props) {
     const clampY = (value: number) => Math.max(minY, Math.min(maxY, value));
     const isFree = (candidate: number) => occupied.every((taken) => Math.abs(candidate - taken) >= minGap);
 
-    const candidates = visibleTradingGroups
-      .map((group) => {
-        const line = group.representative;
-        const shownPrice = group.lines.length === 1 && tradingDrag?.line.id === line.id ? tradingDrag.price : group.price;
-        const lineY = series.priceToCoordinate(shownPrice);
-        const text = tradingGroupLabel(group);
-        if (lineY === null || !text || lineY < -20 || lineY > height + 20) return null;
-        return { group, lineY, text, color: tradingLineColor(line.kind, theme) };
-      })
-      .filter((value): value is { group: TradingLineGroup; lineY: number; text: string; color: string } => value !== null)
-      .sort((a, b) => a.lineY - b.lineY);
+    const candidates: Array<{ group: TradingLineGroup; lineY: number; text: string; color: string }> = [];
+    for (const group of visibleTradingGroups) {
+      const line = group.representative;
+      const shownPrice = group.lines.length === 1 && tradingDrag?.line.id === line.id ? tradingDrag.price : group.price;
+      const coordinate = series.priceToCoordinate(shownPrice);
+      const text = tradingGroupLabel(group);
+      if (coordinate === null || !text) continue;
+      const lineY = Number(coordinate);
+      if (lineY < -20 || lineY > height + 20) continue;
+      candidates.push({ group, lineY, text, color: tradingLineColor(line.kind, theme) });
+    }
+    candidates.sort((a, b) => a.lineY - b.lineY);
 
     const placements: TradingLabelPlacement[] = [];
     for (const candidate of candidates) {
