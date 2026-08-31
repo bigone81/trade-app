@@ -180,5 +180,6 @@ export interface TradingOverlayLine {
   orderType?: string;
   orderStatus?: string;
   positionIdx?: number;
+  groupKey?: string;
   editTarget?: 'order_price' | 'order_trigger' | 'order_sl' | 'order_tp' | 'position_sl' | 'position_tp';
 }

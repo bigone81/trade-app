@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   BarSeries,
   ColorType,
@@ -105,9 +105,42 @@ type TradingLineGroup = {
   qty: number;
   pnl: number;
   accountCount: number;
+  linkKeys: string[];
+};
+
+type ExecutionGroup = {
+  key: string;
+  executions: TradeExecution[];
+  side: TradeExecution['side'];
+  time: number;
+  price: number;
+  qty: number;
+  fee: number;
+  accountCount: number;
+  fillCount: number;
+  orderCount: number;
+};
+
+type TradingLabelPlacement = {
+  group: TradingLineGroup;
+  lineY: number;
+  labelY: number;
+  text: string;
+  color: string;
 };
 
 const compactNumber = (value: number) => String(Number(value.toFixed(8)));
+const lineLinkKey = (line: TradingOverlayLine) => line.groupKey || line.id;
+const tradingLineColor = (kind: TradingOverlayLine['kind'], theme: 'light' | 'dark') =>
+  kind === 'order' ? '#4da3ff' : kind === 'position' ? (theme === 'light' ? '#263244' : '#e6edf7') : kind === 'sl' ? '#ef6675' : kind === 'tp' ? '#31c48d' : '#b783ff';
+
+const shortOrderType = (value?: string) => {
+  const type = String(value || '').toLowerCase();
+  if (type.includes('limit')) return 'LMT';
+  if (type.includes('market')) return 'MKT';
+  if (type.includes('stop')) return 'STOP';
+  return value ? String(value).slice(0, 6).toUpperCase() : 'ORD';
+};
 
 const buildTradingLineGroups = (
   lines: TradingOverlayLine[],
@@ -123,6 +156,7 @@ const buildTradingLineGroups = (
       qty: Number(line.qty || 0),
       pnl: Number(line.pnl || 0),
       accountCount: 1,
+      linkKeys: [lineLinkKey(line)],
     }));
   }
 
@@ -150,8 +184,70 @@ const buildTradingLineGroups = (
       qty: groupLines.reduce((sum, line) => sum + (Number.isFinite(Number(line.qty)) ? Number(line.qty) : 0), 0),
       pnl: groupLines.reduce((sum, line) => sum + (Number.isFinite(Number(line.pnl)) ? Number(line.pnl) : 0), 0),
       accountCount: new Set(groupLines.map((line) => line.accountId)).size,
+      linkKeys: [...new Set(groupLines.map(lineLinkKey))],
     };
   });
+};
+
+
+const executionCandleTime = (candles: Candle[], unixSeconds: number, timeframe: string) => {
+  if (!candles.length) return null;
+  if (unixSeconds < candles[0]!.time || unixSeconds > candles[candles.length - 1]!.time + timeframeSeconds(timeframe)) return null;
+  let lo = 0;
+  let hi = candles.length - 1;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (candles[mid]!.time <= unixSeconds) lo = mid;
+    else hi = mid - 1;
+  }
+  return candles[lo]!.time;
+};
+
+const mergeExecutionRows = (key: string, rows: TradeExecution[], time: number): ExecutionGroup => {
+  const qty = rows.reduce((sum, row) => sum + Number(row.execQty || 0), 0);
+  const weighted = rows.reduce((sum, row) => sum + Number(row.execPrice || 0) * Number(row.execQty || 0), 0);
+  return {
+    key,
+    executions: rows,
+    side: rows[0]!.side,
+    time,
+    price: qty > 0 ? weighted / qty : Number(rows[0]!.execPrice || 0),
+    qty,
+    fee: rows.reduce((sum, row) => sum + Number(row.execFee || 0), 0),
+    accountCount: new Set(rows.map((row) => row.accountId)).size,
+    fillCount: rows.length,
+    orderCount: new Set(rows.map((row) => `${row.accountId}:${row.orderId}`)).size,
+  };
+};
+
+const buildExecutionGroups = (
+  executions: TradeExecution[],
+  symbol: string,
+  timeframe: string,
+  candles: Candle[],
+  mode: 'summary' | 'individual',
+  accountIds: number[],
+): ExecutionGroup[] => {
+  if (!candles.length) return [];
+  const allowed = (accountId: number) => !accountIds.length || accountIds.includes(accountId);
+  const normalized = executions
+    .filter((execution) => execution.symbol === symbol && allowed(execution.accountId))
+    .map((execution) => ({ execution, time: executionCandleTime(candles, Math.floor(execution.execTime / 1000), timeframe) }))
+    .filter((row): row is { execution: TradeExecution; time: number } => row.time !== null);
+
+  const grouped = new Map<string, { rows: TradeExecution[]; time: number }>();
+  for (const { execution, time } of normalized) {
+    const key = mode === 'summary'
+      ? `${execution.side}|${time}`
+      : `${execution.accountId}|${execution.orderId}|${execution.side}|${time}`;
+    const current = grouped.get(key);
+    if (current) current.rows.push(execution);
+    else grouped.set(key, { rows: [execution], time });
+  }
+
+  return [...grouped.entries()]
+    .map(([key, value]) => mergeExecutionRows(key, value.rows, value.time))
+    .sort((a, b) => a.time - b.time || a.price - b.price);
 };
 
 const formatCrosshairTime = (time: number, language: 'en' | 'uk' | 'ru', timeframe: string) => {
@@ -269,6 +365,7 @@ export default function TradingChart(p: Props) {
   const priceDragRef = useRef<PriceDrag | null>(null);
   const [tradingDrag, setTradingDrag] = useState<TradingDrag | null>(null);
   const tradingDragRef = useRef<TradingDrag | null>(null);
+  const [hoveredTradingGroupKey, setHoveredTradingGroupKey] = useState<string | null>(null);
   const [overlayVersion, setOverlayVersion] = useState(0);
   const [wsState, setWsState] = useState<WsState>('connecting');
   const [isAtLiveEdge, setIsAtLiveEdge] = useState(true);
@@ -292,6 +389,25 @@ export default function TradingChart(p: Props) {
   timelineCandlesRef.current = timelineCandles;
   snapPricesRef.current = [...p.autoLevels.map((level) => level.price), ...p.manualLevels.map((level) => level.price)];
   rrPreferencesRef.current = preferences.riskReward;
+
+  const executionGroups = useMemo(
+    () => buildExecutionGroups(
+      p.executions,
+      p.symbol,
+      p.timeframe,
+      timelineCandles,
+      preferences.tradingOverlays.accountDisplayMode,
+      preferences.tradingOverlays.accountIds,
+    ),
+    [
+      p.executions,
+      p.symbol,
+      p.timeframe,
+      timelineCandles,
+      preferences.tradingOverlays.accountDisplayMode,
+      preferences.tradingOverlays.accountIds,
+    ],
+  );
 
   useEffect(() => {
     const next = p.candles;
@@ -519,55 +635,30 @@ export default function TradingChart(p: Props) {
     const plugin = executionMarkersRef.current;
     if (!plugin) return;
     const overlay = preferences.tradingOverlays;
-    if (!overlay.showExecutions || !timelineCandles.length) {
+    if (!overlay.showExecutions || !executionGroups.length) {
       plugin.setMarkers([]);
       return;
     }
 
-    const firstTime = timelineCandles[0]!.time;
-    const lastTime = timelineCandles[timelineCandles.length - 1]!.time;
-    const allowedAccount = (accountId: number) => !overlay.accountIds.length || overlay.accountIds.includes(accountId);
-    const candleTimeFor = (unixSeconds: number) => {
-      const candles = timelineCandles;
-      if (unixSeconds < candles[0]!.time || unixSeconds > candles[candles.length - 1]!.time + timeframeSeconds(p.timeframe)) return null;
-      let lo = 0;
-      let hi = candles.length - 1;
-      while (lo < hi) {
-        const mid = Math.ceil((lo + hi) / 2);
-        if (candles[mid]!.time <= unixSeconds) lo = mid;
-        else hi = mid - 1;
-      }
-      return candles[lo]!.time;
-    };
-
-    const markers = p.executions
-      .filter((execution) => execution.symbol === p.symbol && allowedAccount(execution.accountId))
-      .map((execution) => {
-        const unixSeconds = Math.floor(execution.execTime / 1000);
-        const time = candleTimeFor(unixSeconds);
-        if (time === null || time < firstTime || time > lastTime) return null;
-        const buy = execution.side === 'Buy';
-        const sideText = buy
-          ? (language === 'uk' ? 'КУП' : language === 'ru' ? 'КУП' : 'BUY')
-          : (language === 'uk' ? 'ПРОД' : language === 'ru' ? 'ПРОД' : 'SELL');
-        const account = overlay.showAccountName ? ` · ${execution.accountName}` : '';
-        const qty = overlay.showOrderSize && execution.execQty ? ` ${execution.execQty}` : '';
-        return {
-          id: `execution-${execution.accountId}-${execution.execId}`,
-          time: time as UTCTimestamp,
-          position: buy ? 'atPriceBottom' : 'atPriceTop',
-          price: execution.execPrice,
-          color: buy ? '#31c48d' : '#ef6675',
-          shape: buy ? 'arrowUp' : 'arrowDown',
-          text: `${sideText}${qty}${account}`,
-          size: 0.8,
-        };
-      })
-      .filter(Boolean)
-      .sort((a: any, b: any) => Number(a.time) - Number(b.time));
+    const markers = executionGroups.map((group) => {
+      const buy = group.side === 'Buy';
+      const qty = overlay.showOrderSize && group.qty > 0 ? compactNumber(group.qty) : '';
+      const accounts = overlay.accountDisplayMode === 'summary' && group.accountCount > 1 ? ` · ×${group.accountCount}` : '';
+      const fills = !qty && !accounts && group.fillCount > 1 ? `×${group.fillCount}` : '';
+      return {
+        id: `execution-group-${group.key}`,
+        time: group.time as UTCTimestamp,
+        position: buy ? 'atPriceBottom' : 'atPriceTop',
+        price: group.price,
+        color: buy ? '#31c48d' : '#ef6675',
+        shape: buy ? 'arrowUp' : 'arrowDown',
+        text: `${qty}${accounts}${fills}`.trim(),
+        size: 0.55,
+      };
+    });
 
     plugin.setMarkers(markers);
-  }, [series, p.executions, p.symbol, p.timeframe, timelineCandles, preferences.tradingOverlays, language]);
+  }, [series, executionGroups, preferences.tradingOverlays.showExecutions, preferences.tradingOverlays.showOrderSize, preferences.tradingOverlays.accountDisplayMode]);
 
   useEffect(() => {
     if (!chart || !hostRef.current) return;
@@ -599,6 +690,31 @@ export default function TradingChart(p: Props) {
       observer.disconnect();
     };
   }, [chart, p.symbol, p.timeframe]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    let frame = 0;
+    const redraw = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        setOverlayVersion((value) => value + 1);
+      });
+    };
+    const pointerMove = (event: PointerEvent) => { if (event.buttons) redraw(); };
+    host.addEventListener('pointermove', pointerMove);
+    host.addEventListener('pointerup', redraw);
+    host.addEventListener('wheel', redraw, { passive: true });
+    host.addEventListener('dblclick', redraw);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      host.removeEventListener('pointermove', pointerMove);
+      host.removeEventListener('pointerup', redraw);
+      host.removeEventListener('wheel', redraw);
+      host.removeEventListener('dblclick', redraw);
+    };
+  }, [chart, series]);
 
   useEffect(() => {
     if (!series) return;
@@ -820,46 +936,18 @@ export default function TradingChart(p: Props) {
     const overlay = preferences.tradingOverlays;
     const accountAllowed = (accountId: number) => overlay.accountIds.length === 0 || overlay.accountIds.includes(accountId);
     const kindVisible = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.showOrders : kind === 'position' ? overlay.showPositions : kind === 'sl' ? overlay.showStopLoss : kind === 'tp' ? overlay.showTakeProfit : overlay.showLiquidation;
-    const lineColor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? '#4da3ff' : kind === 'position' ? (theme === 'light' ? '#263244' : '#e6edf7') : kind === 'sl' ? '#ef6675' : kind === 'tp' ? '#31c48d' : '#b783ff';
     const styleFor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.orderStyle : kind === 'position' ? overlay.positionStyle : kind === 'sl' ? overlay.stopStyle : kind === 'tp' ? overlay.targetStyle : 'dotted';
-    const kindTitle = (line: TradingOverlayLine) => {
-      const orderSide=line.side==='Buy'?(language==='uk'?'КУПІВЛЯ':language==='ru'?'ПОКУПКА':'BUY'):line.side==='Sell'?(language==='uk'?'ПРОДАЖ':language==='ru'?'ПРОДАЖА':'SELL'):'';
-      return line.kind === 'order' ? `${orderSide} ${line.orderType || (language==='uk'?'ОРДЕР':language==='ru'?'ОРДЕР':'ORDER')}`.trim() : line.kind === 'position' ? (language==='uk'?'ПОЗИЦІЯ':language==='ru'?'ПОЗИЦИЯ':'POSITION') : line.kind.toUpperCase();
-    };
-    const titleFor = (line: TradingOverlayLine) => {
-      if (overlay.labelMode === 'price') return '';
-      const kind = kindTitle(line);
-      const account = overlay.showAccountName ? ` · ${line.accountName}` : '';
-      if (overlay.labelMode === 'compact') return `${kind}${account}`;
-      const side = line.kind !== 'order' && line.side ? ` · ${line.side === 'Buy' ? 'LONG' : 'SHORT'}` : '';
-      const size = overlay.showOrderSize && line.qty ? ` · ${line.qty}` : '';
-      const pnl = overlay.showPnl && line.kind === 'position' && typeof line.pnl === 'number' && Number.isFinite(line.pnl) ? ` · PnL ${line.pnl.toFixed(2)}` : '';
-      return `${kind}${side}${size}${account}${pnl}`;
-    };
-    const titleForGroup = (group: TradingLineGroup) => {
-      if (group.lines.length === 1 || overlay.accountDisplayMode === 'individual') return titleFor(group.representative);
-      if (overlay.labelMode === 'price') return '';
-      const line = group.representative;
-      const kind = kindTitle(line);
-      const accounts = ` · ${group.accountCount} ${language === 'en' ? 'acc.' : 'акк.'}`;
-      if (overlay.labelMode === 'compact') return `${kind}${accounts}`;
-      const side = line.kind !== 'order' && line.side ? ` · ${line.side === 'Buy' ? 'LONG' : 'SHORT'}` : '';
-      const size = overlay.showOrderSize && group.qty > 0 ? ` · ${compactNumber(group.qty)}` : '';
-      const pnl = overlay.showPnl && line.kind === 'position' && Number.isFinite(group.pnl) ? ` · PnL ${group.pnl.toFixed(2)}` : '';
-      return `${kind}${side}${size}${accounts}${pnl}`;
-    };
-
     const visibleLines = p.tradingLines.filter((line) => accountAllowed(line.accountId) && kindVisible(line.kind));
     const groups = buildTradingLineGroups(visibleLines, overlay.accountDisplayMode, p.tickSize);
     for (const group of groups) {
       const tradingLine = group.representative;
       const priceLine = series.createPriceLine({
         price: group.price,
-        color: rgba(lineColor(tradingLine.kind), overlay.opacity),
+        color: rgba(tradingLineColor(tradingLine.kind, theme), overlay.opacity),
         lineWidth: overlay.lineWidth,
         lineStyle: toLineStyle(styleFor(tradingLine.kind) as any),
         axisLabelVisible: true,
-        title: titleForGroup(group),
+        title: '',
       });
       lines.current.push(priceLine);
       for (const groupedLine of group.lines) tradingLineMap.current.set(groupedLine.id, priceLine);
@@ -1030,7 +1118,7 @@ export default function TradingChart(p: Props) {
     setTradingDrag(next);
   };
 
-  const visibleTradingLines = p.tradingLines.filter((line) => {
+  const visibleTradingLines = useMemo(() => p.tradingLines.filter((line) => {
     const overlay = preferences.tradingOverlays;
     if (overlay.accountIds.length && !overlay.accountIds.includes(line.accountId)) return false;
     if (line.kind === 'order') return overlay.showOrders;
@@ -1038,18 +1126,98 @@ export default function TradingChart(p: Props) {
     if (line.kind === 'sl') return overlay.showStopLoss;
     if (line.kind === 'tp') return overlay.showTakeProfit;
     return overlay.showLiquidation;
-  });
-  const visibleTradingGroups = buildTradingLineGroups(
+  }), [p.tradingLines, preferences.tradingOverlays]);
+
+  const visibleTradingGroups = useMemo(() => buildTradingLineGroups(
     visibleTradingLines,
     preferences.tradingOverlays.accountDisplayMode,
     p.tickSize,
-  );
+  ), [visibleTradingLines, preferences.tradingOverlays.accountDisplayMode, p.tickSize]);
+
+  const hoveredTradingLinks = useMemo(() => {
+    const group = visibleTradingGroups.find((item) => item.key === hoveredTradingGroupKey);
+    return new Set(group?.linkKeys || []);
+  }, [visibleTradingGroups, hoveredTradingGroupKey]);
+
+  useEffect(() => {
+    const overlay = preferences.tradingOverlays;
+    const highlightedWidth = Math.min(3, overlay.lineWidth + 1) as 1 | 2 | 3;
+    for (const group of visibleTradingGroups) {
+      const priceLine = tradingLineMap.current.get(group.representative.id);
+      if (!priceLine) continue;
+      const linked = hoveredTradingLinks.size > 0 && group.linkKeys.some((key) => hoveredTradingLinks.has(key));
+      priceLine.applyOptions({
+        color: rgba(tradingLineColor(group.representative.kind, theme), linked ? 1 : overlay.opacity),
+        lineWidth: linked ? highlightedWidth : overlay.lineWidth,
+      });
+    }
+  }, [visibleTradingGroups, hoveredTradingLinks, preferences.tradingOverlays.lineWidth, preferences.tradingOverlays.opacity, theme]);
+
+  const sideTitle = (side?: TradeExecution['side']) => side === 'Buy'
+    ? (language === 'uk' ? 'КУПІВЛЯ' : language === 'ru' ? 'ПОКУПКА' : 'BUY')
+    : (language === 'uk' ? 'ПРОДАЖ' : language === 'ru' ? 'ПРОДАЖА' : 'SELL');
+
+  const tradingGroupLabel = (group: TradingLineGroup) => {
+    const overlay = preferences.tradingOverlays;
+    if (overlay.labelMode === 'price') return '';
+    const line = group.representative;
+    let head = '';
+    if (line.kind === 'order') head = `${sideTitle(line.side)} ${shortOrderType(line.orderType)}`;
+    else if (line.kind === 'position') head = line.side === 'Buy' ? 'LONG' : 'SHORT';
+    else if (line.kind === 'liq') head = 'LIQ';
+    else head = line.kind.toUpperCase();
+
+    const parts = [head];
+    if (overlay.labelMode === 'full' && overlay.showOrderSize && group.qty > 0) parts.push(compactNumber(group.qty));
+    if (overlay.accountDisplayMode === 'summary' && group.accountCount > 1) parts.push(`×${group.accountCount}`);
+    if (overlay.accountDisplayMode === 'individual' && overlay.showAccountName) parts.push(line.accountName);
+    if (overlay.labelMode === 'full' && overlay.showPnl && line.kind === 'position' && Number.isFinite(group.pnl)) {
+      parts.push(`${group.pnl >= 0 ? '+' : ''}${group.pnl.toFixed(2)}`);
+    }
+    return parts.join(' · ');
+  };
 
   const tradingGroupTooltip = (group: TradingLineGroup) => {
-    if (group.lines.length <= 1) return '';
-    const header = language === 'uk' ? 'Акаунти' : language === 'ru' ? 'Аккаунты' : 'Accounts';
-    return `${header}:\n${group.lines.map((line) => `${line.accountName}${line.qty ? ` · ${line.qty}` : ''}`).join('\n')}`;
+    const accountHeader = language === 'uk' ? 'Акаунти' : language === 'ru' ? 'Аккаунты' : 'Accounts';
+    const line = group.representative;
+    const title = line.kind === 'order'
+      ? `${sideTitle(line.side)} ${shortOrderType(line.orderType)}`
+      : line.kind === 'position'
+        ? (line.side === 'Buy' ? 'LONG' : 'SHORT')
+        : line.kind.toUpperCase();
+    return [
+      `${title} @ ${formatPriceByTick(group.price, p.tickSize)}`,
+      `${accountHeader}:`,
+      ...group.lines.map((item) => `${item.accountName}${item.qty ? ` · ${compactNumber(Number(item.qty))}` : ''}`),
+    ].join('\n');
   };
+
+  const executionTooltip = (group: ExecutionGroup) => {
+    const locale = language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US';
+    const accountRows = new Map<string, { qty: number; fee: number; fills: number }>();
+    for (const execution of group.executions) {
+      const current = accountRows.get(execution.accountName) || { qty: 0, fee: 0, fills: 0 };
+      current.qty += Number(execution.execQty || 0);
+      current.fee += Number(execution.execFee || 0);
+      current.fills += 1;
+      accountRows.set(execution.accountName, current);
+    }
+    const execTime = Math.min(...group.executions.map((execution) => execution.execTime));
+    const time = new Intl.DateTimeFormat(locale, {
+      day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    }).format(new Date(execTime));
+    return [
+      `${sideTitle(group.side)} · ${group.accountCount > 1 ? `×${group.accountCount}` : group.executions[0]?.accountName || ''}`,
+      `${t('Price')}: ${formatPriceByTick(group.price, p.tickSize)}`,
+      `${t('Qty')}: ${compactNumber(group.qty)}`,
+      `${t('Fee')}: ${compactNumber(group.fee)}`,
+      `${t('Executions')}: ${group.fillCount}`,
+      `${t('Time')}: ${time}`,
+      '',
+      ...[...accountRows.entries()].map(([name, row]) => `${name} · ${compactNumber(row.qty)}${row.fills > 1 ? ` · ×${row.fills}` : ''}`),
+    ].join('\n');
+  };
+
 
   const timeToCoordinate = (time: number) => {
     if (!chart) return null;
@@ -1062,6 +1230,60 @@ export default function TradingChart(p: Props) {
     );
     return (chart.timeScale() as any).logicalToCoordinate(logical) as number | null;
   };
+
+  const priceScaleWidth = chart ? Number((chart.priceScale('right') as any).width?.() || 64) : 64;
+
+  const tradingLabelPlacements: TradingLabelPlacement[] = (() => {
+    if (!series || !hostRef.current || preferences.tradingOverlays.labelMode === 'price') return [];
+    const height = hostRef.current.clientHeight;
+    if (!height) return [];
+    const occupied: number[] = [];
+    const reservePrice = (price: number) => {
+      const y = series.priceToCoordinate(price);
+      if (y !== null && y >= 0 && y <= height) occupied.push(y);
+    };
+    p.autoLevels.forEach((level) => reservePrice(level.price));
+    p.manualLevels.forEach((level) => reservePrice(level.price));
+    p.alerts.filter((alert) => alert.active).forEach((alert) => reservePrice(alert.price));
+
+    const minY = 13;
+    const maxY = Math.max(minY, height - 13);
+    const minGap = 22;
+    const clampY = (value: number) => Math.max(minY, Math.min(maxY, value));
+    const isFree = (candidate: number) => occupied.every((taken) => Math.abs(candidate - taken) >= minGap);
+
+    const candidates = visibleTradingGroups
+      .map((group) => {
+        const line = group.representative;
+        const shownPrice = group.lines.length === 1 && tradingDrag?.line.id === line.id ? tradingDrag.price : group.price;
+        const lineY = series.priceToCoordinate(shownPrice);
+        const text = tradingGroupLabel(group);
+        if (lineY === null || !text || lineY < -20 || lineY > height + 20) return null;
+        return { group, lineY, text, color: tradingLineColor(line.kind, theme) };
+      })
+      .filter((value): value is { group: TradingLineGroup; lineY: number; text: string; color: string } => value !== null)
+      .sort((a, b) => a.lineY - b.lineY);
+
+    const placements: TradingLabelPlacement[] = [];
+    for (const candidate of candidates) {
+      const nearest = occupied.length
+        ? occupied.reduce((best, y) => Math.abs(y - candidate.lineY) < Math.abs(best - candidate.lineY) ? y : best, occupied[0]!)
+        : null;
+      const away = nearest === null ? 1 : (candidate.lineY >= nearest ? 1 : -1);
+      const offsets = [0];
+      for (let step = 1; step <= 10; step += 1) {
+        offsets.push(away * step * minGap, -away * step * minGap);
+      }
+      let labelY = clampY(candidate.lineY);
+      for (const offset of offsets) {
+        const attempt = clampY(candidate.lineY + offset);
+        if (isFree(attempt)) { labelY = attempt; break; }
+      }
+      occupied.push(labelY);
+      placements.push({ ...candidate, labelY });
+    }
+    return placements;
+  })();
 
   const entryY = series && rrDraft.entry !== undefined ? series.priceToCoordinate(rrDraft.entry) : null;
   const previewStop = rrDraft.entry !== undefined && rrHover ? rrHover.price : null;
@@ -1243,12 +1465,91 @@ export default function TradingChart(p: Props) {
                   height="16"
                   fill="transparent"
                   className={draggable ? 'trading-line-hit draggable' : 'trading-line-hit'}
+                  onPointerEnter={() => { if (draggable) setHoveredTradingGroupKey(group.key); }}
+                  onPointerLeave={() => { if (draggable) setHoveredTradingGroupKey((current) => current === group.key ? null : current); }}
                   onPointerDown={(event) => { if (draggable) startTradingDrag(line, event); }}
                 />
               </g>
             );
           })}
         </svg>
+      )}
+
+      {series && hostRef.current && tradingLabelPlacements.length > 0 && (
+        <>
+          <svg
+            className="chart-overlay trading-label-connectors"
+            width={hostRef.current.clientWidth}
+            height={hostRef.current.clientHeight}
+            data-version={overlayVersion}
+          >
+            {tradingLabelPlacements.map((placement) => {
+              if (Math.abs(placement.labelY - placement.lineY) < 2) return null;
+              const x = Math.max(12, hostRef.current!.clientWidth - priceScaleWidth - 8);
+              return (
+                <polyline
+                  key={`trade-connector-${placement.group.key}`}
+                  points={`${x + 8},${placement.lineY} ${x},${placement.lineY} ${x},${placement.labelY}`}
+                  fill="none"
+                  stroke={placement.color}
+                  strokeWidth="1"
+                  opacity="0.8"
+                />
+              );
+            })}
+          </svg>
+          <div className="trading-edge-label-layer" data-version={overlayVersion}>
+            {tradingLabelPlacements.map((placement) => {
+              const group = placement.group;
+              const line = group.representative;
+              const draggable = group.lines.length === 1 && canDragTradingLine(line);
+              const linked = hoveredTradingLinks.size > 0 && group.linkKeys.some((key) => hoveredTradingLinks.has(key));
+              const muted = hoveredTradingLinks.size > 0 && !linked;
+              const tooltipUp = placement.labelY > hostRef.current!.clientHeight * 0.62;
+              const style = {
+                top: placement.labelY,
+                right: priceScaleWidth + 8,
+                backgroundColor: rgba(placement.color, 0.96),
+                borderColor: placement.color,
+              } as CSSProperties;
+              return (
+                <div
+                  key={`trade-label-${group.key}`}
+                  className={`trading-edge-label kind-${line.kind}${draggable ? ' draggable' : ''}${linked ? ' linked' : ''}${muted ? ' muted-link' : ''}${tooltipUp ? ' tooltip-up' : ''}`}
+                  style={style}
+                  data-tooltip={tradingGroupTooltip(group)}
+                  onMouseEnter={() => setHoveredTradingGroupKey(group.key)}
+                  onMouseLeave={() => setHoveredTradingGroupKey((current) => current === group.key ? null : current)}
+                  onPointerDown={(event) => { if (draggable) startTradingDrag(line, event); }}
+                >
+                  {placement.text}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {series && hostRef.current && preferences.tradingOverlays.showExecutions && executionGroups.length > 0 && (
+        <div className="execution-hover-layer" data-version={overlayVersion}>
+          {executionGroups.map((group) => {
+            const x = timeToCoordinate(group.time);
+            const priceY = series.priceToCoordinate(group.price);
+            if (x === null || priceY === null || x < -20 || x > hostRef.current!.clientWidth + 20) return null;
+            const y = priceY + (group.side === 'Buy' ? 9 : -9);
+            const tooltipUp = y > hostRef.current!.clientHeight * 0.62;
+            const tooltipLeft = x > hostRef.current!.clientWidth * 0.68;
+            return (
+              <div
+                key={`execution-hit-${group.key}`}
+                className={`execution-hover-target${group.side === 'Buy' ? ' buy' : ' sell'}${tooltipUp ? ' tooltip-up' : ''}${tooltipLeft ? ' tooltip-left' : ''}`}
+                style={{ left: x, top: y }}
+                data-tooltip={executionTooltip(group)}
+                aria-label={executionTooltip(group)}
+              />
+            );
+          })}
+        </div>
       )}
 
       {p.tool === 'risk-reward' && (

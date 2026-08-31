@@ -336,7 +336,7 @@ export default function ChartPage() {
   );
 
   const toggleTradingOverlay = (
-    key: 'showOrders' | 'showPositions' | 'showStopLoss' | 'showTakeProfit' | 'showExecutions' | 'showLiquidation',
+    key: 'showOrders' | 'showPositions' | 'showStopLoss' | 'showTakeProfit' | 'showExecutions',
   ) => {
     savePreferences({
       ...preferences,
@@ -436,10 +436,7 @@ export default function ChartPage() {
           {([
             ['showOrders', t('Orders')],
             ['showPositions', t('Positions')],
-            ['showStopLoss', 'SL'],
-            ['showTakeProfit', 'TP'],
             ['showExecutions', t('Executions')],
-            ['showLiquidation', t('Liq')],
           ] as const).map(([key, label]) => (
             <button
               key={key}
@@ -460,6 +457,26 @@ export default function ChartPage() {
           >
             {preferences.tradingOverlays.accountDisplayMode === 'summary' ? t('Summary') : t('Per account')}
           </button>
+          <details className="chart-overlay-more">
+            <summary className="chart-overlay-toggle chart-overlay-more-trigger" title="SL / TP">•••</summary>
+            <div className="chart-overlay-popover">
+              {([
+                ['showStopLoss', 'SL'],
+                ['showTakeProfit', 'TP'],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={preferences.tradingOverlays[key] ? 'chart-overlay-popover-toggle active' : 'chart-overlay-popover-toggle'}
+                  onClick={() => toggleTradingOverlay(key)}
+                  aria-pressed={preferences.tradingOverlays[key]}
+                >
+                  <span>{label}</span>
+                  <span className="chart-overlay-popover-state">{preferences.tradingOverlays[key] ? 'ON' : 'OFF'}</span>
+                </button>
+              ))}
+            </div>
+          </details>
         </div>
       </div>
 

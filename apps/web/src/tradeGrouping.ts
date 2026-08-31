@@ -97,6 +97,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
   const lines: TradingOverlayLine[] = [];
   for (const group of groupActiveOrders(pendingOrders)) {
     const main = group.main;
+    const groupKey = `order:${main.accountId}:${main.orderId}`;
     const mainPrice = main.price || main.triggerPrice || 0;
     if (mainPrice > 0) {
       lines.push({
@@ -106,6 +107,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
         accountId: main.accountId,
         accountName: main.accountName,
         symbol: main.symbol,
+        groupKey,
         side: main.side,
         qty: main.qty,
         orderId: main.orderId,
@@ -124,6 +126,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
         accountId: main.accountId,
         accountName: main.accountName,
         symbol: main.symbol,
+        groupKey,
         side: main.side,
         qty: main.qty,
         orderId: group.stopLossOrder?.orderId || main.orderId,
@@ -140,6 +143,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
         accountId: main.accountId,
         accountName: main.accountName,
         symbol: main.symbol,
+        groupKey,
         side: main.side,
         qty: main.qty,
         orderId: group.takeProfitOrder?.orderId || main.orderId,
@@ -149,6 +153,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
   }
 
   for (const position of relevantPositions) {
+    const groupKey = `position:${position.accountId}:${position.symbol}:${position.positionIdx}`;
     lines.push({
       id: `position:${position.accountId}:${position.symbol}:${position.positionIdx}`,
       kind: 'position',
@@ -156,6 +161,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
       accountId: position.accountId,
       accountName: position.accountName,
       symbol: position.symbol,
+      groupKey,
       side: position.side,
       qty: position.size,
       pnl: position.unrealisedPnl,
@@ -169,6 +175,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
         accountId: position.accountId,
         accountName: position.accountName,
         symbol: position.symbol,
+        groupKey,
         side: position.side,
         qty: position.size,
         positionIdx: position.positionIdx,
@@ -183,6 +190,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
         accountId: position.accountId,
         accountName: position.accountName,
         symbol: position.symbol,
+        groupKey,
         side: position.side,
         qty: position.size,
         positionIdx: position.positionIdx,
@@ -197,6 +205,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
         accountId: position.accountId,
         accountName: position.accountName,
         symbol: position.symbol,
+        groupKey,
         side: position.side,
         qty: position.size,
         positionIdx: position.positionIdx,
