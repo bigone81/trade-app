@@ -4,6 +4,7 @@ import {
   ColorType,
   LineStyle,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
@@ -16,6 +17,7 @@ import type {
   DrawingTool,
   ManualLevel,
   RiskReward,
+  TradeExecution,
   TradingOverlayLine,
 } from '@trade/shared';
 import RiskRewardOverlay from './RiskRewardOverlay';
@@ -30,6 +32,7 @@ interface Props {
   alerts: AlertRecord[];
   riskRewards: RiskReward[];
   tradingLines: TradingOverlayLine[];
+  executions: TradeExecution[];
   liveTradingEnabled: boolean;
   tool: DrawingTool;
   selectedRiskReward: RiskReward | null;
@@ -195,6 +198,7 @@ export default function TradingChart(p: Props) {
   const manualLineMap = useRef(new Map<number, IPriceLine>());
   const alertLineMap = useRef(new Map<number, IPriceLine>());
   const tradingLineMap = useRef(new Map<string, IPriceLine>());
+  const executionMarkersRef = useRef<any>(null);
   const toolRef = useRef(p.tool);
   const timeframeRef = useRef(p.timeframe);
   const onCreateLevelRef = useRef(p.onCreateLevel);
@@ -443,6 +447,70 @@ export default function TradingChart(p: Props) {
     const fallbackPrice = p.candles.at(-1)?.close || 0;
     series.applyOptions({ priceFormat: chartPriceFormat(p.tickSize, fallbackPrice) });
   }, [series, p.symbol, p.tickSize, p.candles]);
+
+  useEffect(() => {
+    if (!series) return;
+    const plugin = createSeriesMarkers(series, [], { autoScale: false });
+    executionMarkersRef.current = plugin;
+    return () => {
+      if (executionMarkersRef.current === plugin) executionMarkersRef.current = null;
+      try { plugin.detach(); } catch { /* chart teardown can detach it first */ }
+    };
+  }, [series]);
+
+  useEffect(() => {
+    const plugin = executionMarkersRef.current;
+    if (!plugin) return;
+    const overlay = preferences.tradingOverlays;
+    if (!overlay.showExecutions || !timelineCandles.length) {
+      plugin.setMarkers([]);
+      return;
+    }
+
+    const firstTime = timelineCandles[0]!.time;
+    const lastTime = timelineCandles[timelineCandles.length - 1]!.time;
+    const allowedAccount = (accountId: number) => !overlay.accountIds.length || overlay.accountIds.includes(accountId);
+    const candleTimeFor = (unixSeconds: number) => {
+      const candles = timelineCandles;
+      if (unixSeconds < candles[0]!.time || unixSeconds > candles[candles.length - 1]!.time + timeframeSeconds(p.timeframe)) return null;
+      let lo = 0;
+      let hi = candles.length - 1;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (candles[mid]!.time <= unixSeconds) lo = mid;
+        else hi = mid - 1;
+      }
+      return candles[lo]!.time;
+    };
+
+    const markers = p.executions
+      .filter((execution) => execution.symbol === p.symbol && allowedAccount(execution.accountId))
+      .map((execution) => {
+        const unixSeconds = Math.floor(execution.execTime / 1000);
+        const time = candleTimeFor(unixSeconds);
+        if (time === null || time < firstTime || time > lastTime) return null;
+        const buy = execution.side === 'Buy';
+        const sideText = buy
+          ? (language === 'uk' ? 'КУП' : language === 'ru' ? 'КУП' : 'BUY')
+          : (language === 'uk' ? 'ПРОД' : language === 'ru' ? 'ПРОД' : 'SELL');
+        const account = overlay.showAccountName ? ` · ${execution.accountName}` : '';
+        const qty = overlay.showOrderSize && execution.execQty ? ` ${execution.execQty}` : '';
+        return {
+          id: `execution-${execution.accountId}-${execution.execId}`,
+          time: time as UTCTimestamp,
+          position: buy ? 'atPriceBottom' : 'atPriceTop',
+          price: execution.execPrice,
+          color: buy ? '#31c48d' : '#ef6675',
+          shape: buy ? 'arrowUp' : 'arrowDown',
+          text: `${sideText}${qty}${account}`,
+          size: 0.8,
+        };
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => Number(a.time) - Number(b.time));
+
+    plugin.setMarkers(markers);
+  }, [series, p.executions, p.symbol, p.timeframe, timelineCandles, preferences.tradingOverlays, language]);
 
   useEffect(() => {
     if (!chart || !hostRef.current) return;

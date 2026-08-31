@@ -14,6 +14,7 @@ import type {
   Candle,
   ManualLevel,
   RiskReward,
+  TradeExecution,
   TradeOrder,
   TradePosition,
   TradingOverlayLine,
@@ -50,7 +51,7 @@ const formatTurnover = (value: number) => {
 export default function ChartPage() {
   const qc = useQueryClient();
   const ui = useUi();
-  const { preferences } = usePreferences();
+  const { preferences, save: savePreferences } = usePreferences();
   const { t } = useI18n();
   const [tickerSearch, setTickerSearch] = useState('');
   const [livePrice, setLivePrice] = useState<number | null>(null);
@@ -123,6 +124,13 @@ export default function ChartPage() {
     queryKey: ['chart-trade-positions'],
     queryFn: () => api('/api/trade/positions'),
     refetchInterval: 5_000,
+  });
+
+  const tradeExecutions = useQuery<TradeExecution[]>({
+    queryKey: ['chart-trade-executions'],
+    queryFn: () => api('/api/trade/executions'),
+    refetchInterval: 5_000,
+    enabled: preferences.tradingOverlays.showExecutions,
   });
 
   const tradingLines = useMemo(
@@ -327,6 +335,18 @@ export default function ChartPage() {
     </button>
   );
 
+  const toggleTradingOverlay = (
+    key: 'showOrders' | 'showPositions' | 'showStopLoss' | 'showTakeProfit' | 'showExecutions' | 'showLiquidation',
+  ) => {
+    savePreferences({
+      ...preferences,
+      tradingOverlays: {
+        ...preferences.tradingOverlays,
+        [key]: !preferences.tradingOverlays[key],
+      },
+    });
+  };
+
   const mutationError = [
     addLevel.error,
     delLevel.error,
@@ -392,7 +412,7 @@ export default function ChartPage() {
         {tool('risk-reward', Ratio, 'Risk/Reward')}
         {tool('alert', Bell, 'Alert')}
 
-        <span style={{ marginLeft: 'auto' }} className="muted">
+        <span className="muted toolbar-hint">
           {ui.tool === 'level'
             ? t('Click repeatedly to save levels · Esc to finish')
             : ui.tool === 'alert'
@@ -401,6 +421,27 @@ export default function ChartPage() {
                 ? t('Click Entry → Stop · Target is created automatically')
                 : null}
         </span>
+
+        <div className="chart-overlay-toggles" aria-label={t('Trading overlays')}>
+          {([
+            ['showOrders', t('Orders')],
+            ['showPositions', t('Positions')],
+            ['showStopLoss', 'SL'],
+            ['showTakeProfit', 'TP'],
+            ['showExecutions', t('Executions')],
+            ['showLiquidation', t('Liq')],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className={preferences.tradingOverlays[key] ? 'chart-overlay-toggle active' : 'chart-overlay-toggle'}
+              onClick={() => toggleTradingOverlay(key)}
+              aria-pressed={preferences.tradingOverlays[key]}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {candles.error && (
@@ -422,6 +463,7 @@ export default function ChartPage() {
           alerts={alerts.data || []}
           riskRewards={rr.data || []}
           tradingLines={tradingLines}
+          executions={tradeExecutions.data || []}
           liveTradingEnabled={config.data?.liveTradingEnabled ?? false}
           tool={ui.tool}
           selectedRiskReward={ui.selectedRiskReward}
