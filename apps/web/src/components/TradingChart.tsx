@@ -935,7 +935,7 @@ export default function TradingChart(p: Props) {
 
     const overlay = preferences.tradingOverlays;
     const accountAllowed = (accountId: number) => overlay.accountIds.length === 0 || overlay.accountIds.includes(accountId);
-    const kindVisible = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.showOrders : kind === 'position' ? overlay.showPositions : kind === 'sl' ? overlay.showStopLoss : kind === 'tp' ? overlay.showTakeProfit : overlay.showLiquidation;
+    const kindVisible = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.showOrders : kind === 'position' ? overlay.showPositions : kind === 'sl' || kind === 'tp' ? overlay.showOrders : overlay.showLiquidation;
     const styleFor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.orderStyle : kind === 'position' ? overlay.positionStyle : kind === 'sl' ? overlay.stopStyle : kind === 'tp' ? overlay.targetStyle : 'dotted';
     const visibleLines = p.tradingLines.filter((line) => accountAllowed(line.accountId) && kindVisible(line.kind));
     const groups = buildTradingLineGroups(visibleLines, overlay.accountDisplayMode, p.tickSize);
@@ -1123,8 +1123,7 @@ export default function TradingChart(p: Props) {
     if (overlay.accountIds.length && !overlay.accountIds.includes(line.accountId)) return false;
     if (line.kind === 'order') return overlay.showOrders;
     if (line.kind === 'position') return overlay.showPositions;
-    if (line.kind === 'sl') return overlay.showStopLoss;
-    if (line.kind === 'tp') return overlay.showTakeProfit;
+    if (line.kind === 'sl' || line.kind === 'tp') return overlay.showOrders;
     return overlay.showLiquidation;
   }), [p.tradingLines, preferences.tradingOverlays]);
 

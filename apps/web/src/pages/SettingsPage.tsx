@@ -195,10 +195,8 @@ export default function SettingsPage() {
 
         <section className="card settings-card trading-overlay-settings">
           <h3>{t('Chart')} · {t('Trading overlays')}</h3>
-          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showOrders} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showOrders:e.target.checked}})}/> {t('Show active orders')}</label>
+          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showOrders} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showOrders:e.target.checked,showStopLoss:e.target.checked,showTakeProfit:e.target.checked}})}/> {t('Show active orders')} · SL / TP</label>
           <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showPositions} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showPositions:e.target.checked}})}/> {t('Show open positions')}</label>
-          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showStopLoss} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showStopLoss:e.target.checked}})}/> {t('Show Stop Loss')}</label>
-          <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showTakeProfit} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showTakeProfit:e.target.checked}})}/> {t('Show Take Profit')}</label>
           <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showExecutions} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showExecutions:e.target.checked}})}/> {t('Show executions')}</label>
           <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showLiquidation} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showLiquidation:e.target.checked}})}/> {t('Show liquidation price')}</label>
 
