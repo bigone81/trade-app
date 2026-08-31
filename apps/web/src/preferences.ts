@@ -28,6 +28,9 @@ export interface AppPreferences {
     snapToLevels: boolean;
     snapPixels: number;
   };
+  autoLevels: {
+    lookbackDays: 30 | 60 | 90 | 180;
+  };
   chart: {
     futureBars: number;
     showGrid: boolean;
@@ -91,6 +94,9 @@ export const defaultPreferences: AppPreferences = {
     snapToLevels: true,
     snapPixels: 8,
   },
+  autoLevels: {
+    lookbackDays: 90,
+  },
   chart: {
     futureBars: 24,
     showGrid: true,
@@ -137,6 +143,7 @@ function mergePreferences(raw: Partial<AppPreferences> | null): AppPreferences {
     fixedAccountSize: { ...defaultPreferences.fixedAccountSize, ...(raw?.fixedAccountSize || {}) },
     manualLevel: { ...defaultPreferences.manualLevel, ...(raw?.manualLevel || {}) },
     riskReward: { ...defaultPreferences.riskReward, ...(raw?.riskReward || {}) },
+    autoLevels: { ...defaultPreferences.autoLevels, ...(raw?.autoLevels || {}) },
     chart: { ...defaultPreferences.chart, ...(raw?.chart || {}) },
     journal: { ...defaultPreferences.journal, ...(raw?.journal || {}) },
     tradingOverlays: { ...defaultPreferences.tradingOverlays, ...(raw?.tradingOverlays || {}) },

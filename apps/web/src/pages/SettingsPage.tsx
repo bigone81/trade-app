@@ -177,6 +177,16 @@ export default function SettingsPage() {
           <h3>{preferences.language==='uk'?'Сканер ринку':preferences.language==='ru'?'Сканер рынка':'Market scanner'}</h3>
           <div className="field"><label>{t('Min 24h turnover')} · ${ui.minTurnoverMillions}M</label><input className="range" type="range" min="0" max="1000" step="10" value={ui.minTurnoverMillions} onChange={(e)=>ui.setMinTurnoverMillions(Number(e.target.value))}/></div>
           <div className="field"><label>{preferences.language==='uk'?'Діапазон автоматичних рівнів':preferences.language==='ru'?'Диапазон автоматических уровней':'Automatic levels range'} · ±{ui.levelTolerancePercent}%</label><input className="range" type="range" min="0.5" max="100" step="0.5" value={ui.levelTolerancePercent} onChange={(e)=>ui.setLevelTolerancePercent(Number(e.target.value))}/></div>
+          <div className="field">
+            <label>{preferences.language==='uk'?'Історія для автоматичних рівнів':preferences.language==='ru'?'История для автоматических уровней':'Automatic levels history'}</label>
+            <select className="select" value={preferences.autoLevels.lookbackDays} onChange={(e)=>save({...preferences,autoLevels:{...preferences.autoLevels,lookbackDays:Number(e.target.value) as 30|60|90|180}})}>
+              <option value={30}>30 {preferences.language==='uk'?'днів':preferences.language==='ru'?'дней':'days'}</option>
+              <option value={60}>60 {preferences.language==='uk'?'днів':preferences.language==='ru'?'дней':'days'}</option>
+              <option value={90}>90 {preferences.language==='uk'?'днів':preferences.language==='ru'?'дней':'days'}</option>
+              <option value={180}>180 {preferences.language==='uk'?'днів':preferences.language==='ru'?'дней':'days'}</option>
+            </select>
+          </div>
+          <p className="muted settings-hint">{preferences.language==='uk'?'Авторівні завжди рахуються лише з денних свічок. Сила рівня враховує кількість реакцій, щільність цін, давність останнього торкання та тривалість життя рівня.':preferences.language==='ru'?'Автоуровни всегда считаются только по дневным свечам. Сила уровня учитывает число реакций, плотность цен, давность последнего касания и длительность жизни уровня.':'Automatic levels are always calculated from daily candles only. Strength uses reaction count, price compactness, recency and how long the level has persisted.'}</p>
           <p className="muted settings-hint">{t('Scanner preferences are stored locally and are shared with the sliders on the Chart page.')}</p>
         </section>
 

@@ -119,7 +119,7 @@ async function buildOne(trade:SnapshotTrade,preferences:AppPreferences,spec:Snap
   const qSymbol=encodeURIComponent(symbol);
   const [candles,levels,manual,riskRewards,alerts,instrument,orders,positions]=await Promise.all([
     api<Candle[]>(`/api/market/candles?symbol=${qSymbol}&interval=${spec.interval}&limit=${spec.limit}&end=${Math.floor(endMs)}`),
-    api<{limitLevels:AutoLevel[];mirrorLevels:AutoLevel[]}>(`/api/market/levels?symbol=${qSymbol}&interval=D&end=${Math.floor(Math.min(Date.now(),(occurred+86400)*1000))}`),
+    api<{limitLevels:AutoLevel[];mirrorLevels:AutoLevel[]}>(`/api/market/levels?symbol=${qSymbol}&days=${preferences.autoLevels.lookbackDays}&end=${Math.floor(Math.min(Date.now(),(occurred+86400)*1000))}`),
     api<ManualLevel[]>(`/api/drawings/levels?symbol=${qSymbol}`),
     api<RiskReward[]>(`/api/drawings/risk-rewards?symbol=${qSymbol}`),
     api<AlertRecord[]>(`/api/alerts?symbol=${qSymbol}`),
