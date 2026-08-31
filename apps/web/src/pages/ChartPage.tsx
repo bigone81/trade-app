@@ -347,6 +347,16 @@ export default function ChartPage() {
     });
   };
 
+  const toggleTradingAccountMode = () => {
+    savePreferences({
+      ...preferences,
+      tradingOverlays: {
+        ...preferences.tradingOverlays,
+        accountDisplayMode: preferences.tradingOverlays.accountDisplayMode === 'summary' ? 'individual' : 'summary',
+      },
+    });
+  };
+
   const mutationError = [
     addLevel.error,
     delLevel.error,
@@ -441,6 +451,15 @@ export default function ChartPage() {
               {label}
             </button>
           ))}
+          <button
+            type="button"
+            className={preferences.tradingOverlays.accountDisplayMode === 'summary' ? 'chart-overlay-toggle active' : 'chart-overlay-toggle'}
+            onClick={toggleTradingAccountMode}
+            aria-pressed={preferences.tradingOverlays.accountDisplayMode === 'summary'}
+            title={preferences.tradingOverlays.accountDisplayMode === 'summary' ? t('Summary across accounts') : t('Per account')}
+          >
+            {preferences.tradingOverlays.accountDisplayMode === 'summary' ? t('Summary') : t('Per account')}
+          </button>
         </div>
       </div>
 

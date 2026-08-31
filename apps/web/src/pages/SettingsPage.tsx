@@ -203,7 +203,10 @@ export default function SettingsPage() {
           <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showLiquidation} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showLiquidation:e.target.checked}})}/> {t('Show liquidation price')}</label>
 
           <div className="settings-subtitle">{t('Labels')}</div>
-          <div className="field"><label>{t('Label detail')}</label><select className="select" value={preferences.tradingOverlays.labelMode} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,labelMode:e.target.value as any}})}><option value="full">{t('Full')}</option><option value="compact">{t('Compact')}</option><option value="price">{t('Price only')}</option></select></div>
+          <div className="field-grid">
+            <div className="field"><label>{t('Label detail')}</label><select className="select" value={preferences.tradingOverlays.labelMode} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,labelMode:e.target.value as any}})}><option value="full">{t('Full')}</option><option value="compact">{t('Compact')}</option><option value="price">{t('Price only')}</option></select></div>
+            <div className="field"><label>{t('Account display')}</label><select className="select" value={preferences.tradingOverlays.accountDisplayMode} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,accountDisplayMode:e.target.value as any}})}><option value="summary">{t('Summary')}</option><option value="individual">{t('Per account')}</option></select></div>
+          </div>
           <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showAccountName} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showAccountName:e.target.checked}})}/> {t('Show account name')}</label>
           <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showOrderSize} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showOrderSize:e.target.checked}})}/> {t('Show order / position size')}</label>
           <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.showPnl} onChange={(e)=>save({...preferences,tradingOverlays:{...preferences.tradingOverlays,showPnl:e.target.checked}})}/> {t('Show unrealized PnL on position label')}</label>
@@ -223,6 +226,7 @@ export default function SettingsPage() {
           <label className="setting-check"><input type="checkbox" checked={preferences.tradingOverlays.accountIds.length===0} onChange={(e)=>{if(e.target.checked)save({...preferences,tradingOverlays:{...preferences.tradingOverlays,accountIds:[]}})}}/> {t('All accounts')}</label>
           {accounts.map((a)=>{const all=preferences.tradingOverlays.accountIds.length===0;const checked=all||preferences.tradingOverlays.accountIds.includes(a.id);return <label className="setting-check nested" key={`overlay-account-${a.id}`}><input type="checkbox" checked={checked} onChange={(e)=>{let ids=all?accounts.map(x=>x.id):[...preferences.tradingOverlays.accountIds];ids=e.target.checked?[...new Set([...ids,a.id])]:ids.filter(id=>id!==a.id);if(ids.length===accounts.length)ids=[];save({...preferences,tradingOverlays:{...preferences.tradingOverlays,accountIds:ids}})}}/> {a.name}{a.demo?' · demo':''}</label>})}
           <p className="muted settings-hint">{t('Order/SL/TP lines come from the exchange and are separate from Manual Levels. Position Entry is read-only.')}</p>
+          <p className="muted settings-hint">{t('Summary groups matching prices across accounts. Switch to Per account to drag one account separately.')}</p>
         </section>
 
         <section className="card settings-card">

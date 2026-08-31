@@ -5,6 +5,7 @@ export type ThemeMode = 'system' | 'light' | 'dark';
 export type AppLanguage = 'en' | 'uk' | 'ru';
 export type LevelLineStyle = 'solid' | 'dashed' | 'dotted';
 export type TradingOverlayLabelMode = 'full' | 'compact' | 'price';
+export type TradingOverlayAccountMode = 'summary' | 'individual';
 
 export interface AppPreferences {
   theme: ThemeMode;
@@ -53,6 +54,7 @@ export interface AppPreferences {
     showOrderSize: boolean;
     showPnl: boolean;
     labelMode: TradingOverlayLabelMode;
+    accountDisplayMode: TradingOverlayAccountMode;
     lineWidth: 1 | 2 | 3;
     opacity: number;
     orderStyle: LevelLineStyle;
@@ -117,6 +119,7 @@ export const defaultPreferences: AppPreferences = {
     showOrderSize: true,
     showPnl: false,
     labelMode: 'full',
+    accountDisplayMode: 'summary',
     lineWidth: 1,
     opacity: 0.95,
     orderStyle: 'solid',

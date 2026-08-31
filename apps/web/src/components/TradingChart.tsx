@@ -97,6 +97,63 @@ const formatPriceByTick = (price: number, tickSize: string | null) => {
   return Number(price).toFixed(format.precision);
 };
 
+type TradingLineGroup = {
+  key: string;
+  lines: TradingOverlayLine[];
+  representative: TradingOverlayLine;
+  price: number;
+  qty: number;
+  pnl: number;
+  accountCount: number;
+};
+
+const compactNumber = (value: number) => String(Number(value.toFixed(8)));
+
+const buildTradingLineGroups = (
+  lines: TradingOverlayLine[],
+  mode: 'summary' | 'individual',
+  tickSize: string | null,
+): TradingLineGroup[] => {
+  if (mode === 'individual') {
+    return lines.map((line) => ({
+      key: line.id,
+      lines: [line],
+      representative: line,
+      price: line.price,
+      qty: Number(line.qty || 0),
+      pnl: Number(line.pnl || 0),
+      accountCount: 1,
+    }));
+  }
+
+  const grouped = new Map<string, TradingOverlayLine[]>();
+  for (const line of lines) {
+    const key = [
+      line.kind,
+      line.side || '',
+      line.orderType || '',
+      line.editTarget || '',
+      formatPriceByTick(line.price, tickSize),
+    ].join('|');
+    const existing = grouped.get(key);
+    if (existing) existing.push(line);
+    else grouped.set(key, [line]);
+  }
+
+  return [...grouped.entries()].map(([key, groupLines]) => {
+    const representative = groupLines[0]!;
+    return {
+      key,
+      lines: groupLines,
+      representative,
+      price: representative.price,
+      qty: groupLines.reduce((sum, line) => sum + (Number.isFinite(Number(line.qty)) ? Number(line.qty) : 0), 0),
+      pnl: groupLines.reduce((sum, line) => sum + (Number.isFinite(Number(line.pnl)) ? Number(line.pnl) : 0), 0),
+      accountCount: new Set(groupLines.map((line) => line.accountId)).size,
+    };
+  });
+};
+
 const formatCrosshairTime = (time: number, language: 'en' | 'uk' | 'ru', timeframe: string) => {
   const locale = language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US';
   const date = new Date(time * 1000);
@@ -765,10 +822,13 @@ export default function TradingChart(p: Props) {
     const kindVisible = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.showOrders : kind === 'position' ? overlay.showPositions : kind === 'sl' ? overlay.showStopLoss : kind === 'tp' ? overlay.showTakeProfit : overlay.showLiquidation;
     const lineColor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? '#4da3ff' : kind === 'position' ? (theme === 'light' ? '#263244' : '#e6edf7') : kind === 'sl' ? '#ef6675' : kind === 'tp' ? '#31c48d' : '#b783ff';
     const styleFor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.orderStyle : kind === 'position' ? overlay.positionStyle : kind === 'sl' ? overlay.stopStyle : kind === 'tp' ? overlay.targetStyle : 'dotted';
+    const kindTitle = (line: TradingOverlayLine) => {
+      const orderSide=line.side==='Buy'?(language==='uk'?'КУПІВЛЯ':language==='ru'?'ПОКУПКА':'BUY'):line.side==='Sell'?(language==='uk'?'ПРОДАЖ':language==='ru'?'ПРОДАЖА':'SELL'):'';
+      return line.kind === 'order' ? `${orderSide} ${line.orderType || (language==='uk'?'ОРДЕР':language==='ru'?'ОРДЕР':'ORDER')}`.trim() : line.kind === 'position' ? (language==='uk'?'ПОЗИЦІЯ':language==='ru'?'ПОЗИЦИЯ':'POSITION') : line.kind.toUpperCase();
+    };
     const titleFor = (line: TradingOverlayLine) => {
       if (overlay.labelMode === 'price') return '';
-      const orderSide=line.side==='Buy'?(language==='uk'?'КУПІВЛЯ':language==='ru'?'ПОКУПКА':'BUY'):line.side==='Sell'?(language==='uk'?'ПРОДАЖ':language==='ru'?'ПРОДАЖА':'SELL'):'';
-      const kind = line.kind === 'order' ? `${orderSide} ${line.orderType || (language==='uk'?'ОРДЕР':language==='ru'?'ОРДЕР':'ORDER')}`.trim() : line.kind === 'position' ? (language==='uk'?'ПОЗИЦІЯ':language==='ru'?'ПОЗИЦИЯ':'POSITION') : line.kind.toUpperCase();
+      const kind = kindTitle(line);
       const account = overlay.showAccountName ? ` · ${line.accountName}` : '';
       if (overlay.labelMode === 'compact') return `${kind}${account}`;
       const side = line.kind !== 'order' && line.side ? ` · ${line.side === 'Buy' ? 'LONG' : 'SHORT'}` : '';
@@ -776,18 +836,33 @@ export default function TradingChart(p: Props) {
       const pnl = overlay.showPnl && line.kind === 'position' && typeof line.pnl === 'number' && Number.isFinite(line.pnl) ? ` · PnL ${line.pnl.toFixed(2)}` : '';
       return `${kind}${side}${size}${account}${pnl}`;
     };
+    const titleForGroup = (group: TradingLineGroup) => {
+      if (group.lines.length === 1 || overlay.accountDisplayMode === 'individual') return titleFor(group.representative);
+      if (overlay.labelMode === 'price') return '';
+      const line = group.representative;
+      const kind = kindTitle(line);
+      const accounts = ` · ${group.accountCount} ${language === 'en' ? 'acc.' : 'акк.'}`;
+      if (overlay.labelMode === 'compact') return `${kind}${accounts}`;
+      const side = line.kind !== 'order' && line.side ? ` · ${line.side === 'Buy' ? 'LONG' : 'SHORT'}` : '';
+      const size = overlay.showOrderSize && group.qty > 0 ? ` · ${compactNumber(group.qty)}` : '';
+      const pnl = overlay.showPnl && line.kind === 'position' && Number.isFinite(group.pnl) ? ` · PnL ${group.pnl.toFixed(2)}` : '';
+      return `${kind}${side}${size}${accounts}${pnl}`;
+    };
 
-    for (const tradingLine of p.tradingLines.filter((line) => accountAllowed(line.accountId) && kindVisible(line.kind))) {
-      const line = series.createPriceLine({
-        price: tradingLine.price,
+    const visibleLines = p.tradingLines.filter((line) => accountAllowed(line.accountId) && kindVisible(line.kind));
+    const groups = buildTradingLineGroups(visibleLines, overlay.accountDisplayMode, p.tickSize);
+    for (const group of groups) {
+      const tradingLine = group.representative;
+      const priceLine = series.createPriceLine({
+        price: group.price,
         color: rgba(lineColor(tradingLine.kind), overlay.opacity),
         lineWidth: overlay.lineWidth,
         lineStyle: toLineStyle(styleFor(tradingLine.kind) as any),
         axisLabelVisible: true,
-        title: titleFor(tradingLine),
+        title: titleForGroup(group),
       });
-      lines.current.push(line);
-      tradingLineMap.current.set(tradingLine.id, line);
+      lines.current.push(priceLine);
+      for (const groupedLine of group.lines) tradingLineMap.current.set(groupedLine.id, priceLine);
     }
   }, [series, p.autoLevels, p.manualLevels, p.alerts, p.tradingLines, theme, preferences.manualLevel, preferences.tradingOverlays, language, t]);
 
@@ -964,6 +1039,17 @@ export default function TradingChart(p: Props) {
     if (line.kind === 'tp') return overlay.showTakeProfit;
     return overlay.showLiquidation;
   });
+  const visibleTradingGroups = buildTradingLineGroups(
+    visibleTradingLines,
+    preferences.tradingOverlays.accountDisplayMode,
+    p.tickSize,
+  );
+
+  const tradingGroupTooltip = (group: TradingLineGroup) => {
+    if (group.lines.length <= 1) return '';
+    const header = language === 'uk' ? 'Акаунти' : language === 'ru' ? 'Аккаунты' : 'Accounts';
+    return `${header}:\n${group.lines.map((line) => `${line.accountName}${line.qty ? ` · ${line.qty}` : ''}`).join('\n')}`;
+  };
 
   const timeToCoordinate = (time: number) => {
     if (!chart) return null;
@@ -1140,22 +1226,26 @@ export default function TradingChart(p: Props) {
               );
             })}
 
-          {visibleTradingLines.map((line) => {
-            const shownPrice = tradingDrag?.line.id === line.id ? tradingDrag.price : line.price;
+          {visibleTradingGroups.map((group) => {
+            const line = group.representative;
+            const isSingle = group.lines.length === 1;
+            const shownPrice = isSingle && tradingDrag?.line.id === line.id ? tradingDrag.price : group.price;
             const y = series.priceToCoordinate(shownPrice);
             if (y === null) return null;
-            const draggable = canDragTradingLine(line);
+            const draggable = isSingle && canDragTradingLine(line);
             return (
-              <rect
-                key={`trading-hit-${line.id}`}
-                x="0"
-                y={y - 8}
-                width={hostRef.current!.clientWidth}
-                height="16"
-                fill="transparent"
-                className={draggable ? 'trading-line-hit draggable' : 'trading-line-hit'}
-                onPointerDown={(event) => startTradingDrag(line, event)}
-              />
+              <g key={`trading-hit-${group.key}`}>
+                {group.lines.length > 1 && <title>{tradingGroupTooltip(group)}</title>}
+                <rect
+                  x="0"
+                  y={y - 8}
+                  width={hostRef.current!.clientWidth}
+                  height="16"
+                  fill="transparent"
+                  className={draggable ? 'trading-line-hit draggable' : 'trading-line-hit'}
+                  onPointerDown={(event) => { if (draggable) startTradingDrag(line, event); }}
+                />
+              </g>
             );
           })}
         </svg>
