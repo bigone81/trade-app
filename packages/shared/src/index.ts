@@ -168,7 +168,7 @@ export interface TradeExecution {
 
 export interface TradingOverlayLine {
   id: string;
-  kind: 'order' | 'position' | 'sl' | 'tp' | 'liq';
+  kind: 'order' | 'trigger' | 'position' | 'sl' | 'tp' | 'liq';
   price: number;
   accountId: number;
   accountName: string;

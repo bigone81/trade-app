@@ -133,7 +133,7 @@ type TradingLabelPlacement = {
 const compactNumber = (value: number) => String(Number(value.toFixed(8)));
 const lineLinkKey = (line: TradingOverlayLine) => line.groupKey || line.id;
 const tradingLineColor = (kind: TradingOverlayLine['kind'], theme: 'light' | 'dark') =>
-  kind === 'order' ? '#4da3ff' : kind === 'position' ? (theme === 'light' ? '#263244' : '#e6edf7') : kind === 'sl' ? '#ef6675' : kind === 'tp' ? '#31c48d' : '#b783ff';
+  kind === 'order' ? '#4da3ff' : kind === 'trigger' ? '#e7a93b' : kind === 'position' ? (theme === 'light' ? '#263244' : '#e6edf7') : kind === 'sl' ? '#ef6675' : kind === 'tp' ? '#31c48d' : '#b783ff';
 
 const shortOrderType = (value?: string) => {
   const type = String(value || '').toLowerCase();
@@ -956,8 +956,8 @@ export default function TradingChart(p: Props) {
 
     const overlay = preferences.tradingOverlays;
     const accountAllowed = (accountId: number) => overlay.accountIds.length === 0 || overlay.accountIds.includes(accountId);
-    const kindVisible = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.showOrders : kind === 'position' ? overlay.showPositions : kind === 'sl' || kind === 'tp' ? overlay.showOrders : overlay.showLiquidation;
-    const styleFor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.orderStyle : kind === 'position' ? overlay.positionStyle : kind === 'sl' ? overlay.stopStyle : kind === 'tp' ? overlay.targetStyle : 'dotted';
+    const kindVisible = (kind: TradingOverlayLine['kind']) => kind === 'order' || kind === 'trigger' ? overlay.showOrders : kind === 'position' ? overlay.showPositions : kind === 'sl' || kind === 'tp' ? overlay.showOrders : overlay.showLiquidation;
+    const styleFor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.orderStyle : kind === 'trigger' ? 'dashed' : kind === 'position' ? overlay.positionStyle : kind === 'sl' ? overlay.stopStyle : kind === 'tp' ? overlay.targetStyle : 'dotted';
     const visibleLines = p.tradingLines.filter((line) => accountAllowed(line.accountId) && kindVisible(line.kind));
     const groups = buildTradingLineGroups(visibleLines, overlay.accountDisplayMode, p.tickSize);
     for (const group of groups) {
@@ -1123,7 +1123,7 @@ export default function TradingChart(p: Props) {
 
   const canDragTradingLine = (line: TradingOverlayLine) => {
     if (!p.liveTradingEnabled || !line.editTarget) return false;
-    if (line.kind === 'order') return preferences.tradingOverlays.allowDragOrders;
+    if (line.kind === 'order' || line.kind === 'trigger') return preferences.tradingOverlays.allowDragOrders;
     if (line.kind === 'sl') return preferences.tradingOverlays.allowDragStops;
     if (line.kind === 'tp') return preferences.tradingOverlays.allowDragTargets;
     return false;
@@ -1142,7 +1142,7 @@ export default function TradingChart(p: Props) {
   const visibleTradingLines = useMemo(() => p.tradingLines.filter((line) => {
     const overlay = preferences.tradingOverlays;
     if (overlay.accountIds.length && !overlay.accountIds.includes(line.accountId)) return false;
-    if (line.kind === 'order') return overlay.showOrders;
+    if (line.kind === 'order' || line.kind === 'trigger') return overlay.showOrders;
     if (line.kind === 'position') return overlay.showPositions;
     if (line.kind === 'sl' || line.kind === 'tp') return overlay.showOrders;
     return overlay.showLiquidation;
@@ -1183,6 +1183,7 @@ export default function TradingChart(p: Props) {
     const line = group.representative;
     let head = '';
     if (line.kind === 'order') head = `${sideTitle(line.side)} ${shortOrderType(line.orderType)}`;
+    else if (line.kind === 'trigger') head = t('Trigger').toUpperCase();
     else if (line.kind === 'position') head = line.side === 'Buy' ? 'LONG' : 'SHORT';
     else if (line.kind === 'liq') head = 'LIQ';
     else head = line.kind.toUpperCase();
@@ -1202,7 +1203,9 @@ export default function TradingChart(p: Props) {
     const line = group.representative;
     const title = line.kind === 'order'
       ? `${sideTitle(line.side)} ${shortOrderType(line.orderType)}`
-      : line.kind === 'position'
+      : line.kind === 'trigger'
+        ? t('Trigger').toUpperCase()
+        : line.kind === 'position'
         ? (line.side === 'Buy' ? 'LONG' : 'SHORT')
         : line.kind.toUpperCase();
     return [

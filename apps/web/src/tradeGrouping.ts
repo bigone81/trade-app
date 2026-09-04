@@ -98,7 +98,7 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
   for (const group of groupActiveOrders(pendingOrders)) {
     const main = group.main;
     const groupKey = `order:${main.accountId}:${main.orderId}`;
-    const mainPrice = main.price || main.triggerPrice || 0;
+    const mainPrice = main.price || 0;
     if (mainPrice > 0) {
       lines.push({
         id: `order:${main.accountId}:${main.orderId}`,
@@ -113,7 +113,25 @@ export function buildTradingOverlayLines(symbol: string, orders: TradeOrder[] = 
         orderId: main.orderId,
         orderType: main.orderType,
         orderStatus: main.orderStatus,
-        editTarget: main.price > 0 ? 'order_price' : 'order_trigger',
+        editTarget: 'order_price',
+      });
+    }
+
+    if (main.triggerPrice && main.triggerPrice > 0) {
+      lines.push({
+        id: `order-trigger:${main.accountId}:${main.orderId}`,
+        kind: 'trigger',
+        price: main.triggerPrice,
+        accountId: main.accountId,
+        accountName: main.accountName,
+        symbol: main.symbol,
+        groupKey,
+        side: main.side,
+        qty: main.qty,
+        orderId: main.orderId,
+        orderType: main.orderType,
+        orderStatus: main.orderStatus,
+        editTarget: 'order_trigger',
       });
     }
 
