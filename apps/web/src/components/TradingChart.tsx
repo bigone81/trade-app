@@ -1552,7 +1552,7 @@ export default function TradingChart(p: Props) {
               return (
                 <div
                   key={`trade-label-${group.key}`}
-                  className={`trading-edge-label kind-${line.kind}${draggable ? ' draggable' : ''}${linked ? ' linked' : ''}${muted ? ' muted-link' : ''}${tooltipUp ? ' tooltip-up' : ''}`}
+                  className={`trading-edge-label kind-${line.kind}${draggable ? ' draggable' : ''}${cancelable ? ' has-cancel' : ''}${linked ? ' linked' : ''}${muted ? ' muted-link' : ''}${tooltipUp ? ' tooltip-up' : ''}`}
                   style={style}
                   data-tooltip={tradingGroupTooltip(group)}
                   onMouseEnter={() => setHoveredTradingGroupKey(group.key)}
