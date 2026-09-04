@@ -120,3 +120,5 @@ html[data-theme="light"] .chart-overlay-popover{background:#fff;border-color:#d3
     min-height:0;
   }
 }
+
+.tool-btn:disabled{opacity:.35;cursor:not-allowed}.tool-btn:disabled:hover{background:transparent;color:#8390a3}

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
   Calculator,
   MousePointer2,
+  Pin,
   Plus,
   Ratio,
 } from 'lucide-react';
@@ -55,6 +56,8 @@ export default function ChartPage() {
   const { t } = useI18n();
   const [tickerSearch, setTickerSearch] = useState('');
   const [livePrice, setLivePrice] = useState<number | null>(null);
+  const [viewportAutoLevels, setViewportAutoLevels] = useState<AutoLevel[]>([]);
+  const [freezeFeedback, setFreezeFeedback] = useState<string | null>(null);
   const [pendingTradingChange, setPendingTradingChange] = useState<{ line: TradingOverlayLine; price: number } | null>(null);
 
   const config = useQuery<{
@@ -155,6 +158,38 @@ export default function ChartPage() {
       invalidate();
       // Keep Level tool active so several manual levels can be placed with
       // consecutive single clicks. Select/Escape exits drawing mode.
+    },
+  });
+
+  const freezeVisibleLevels = useMutation({
+    mutationFn: async (candidates: AutoLevel[]) => {
+      const existing = await api<ManualLevel[]>(`/api/drawings/levels?symbol=${ui.symbol}`);
+      const tick = Number(instrument.data?.tickSize || 0);
+      const createdPrices: number[] = [];
+
+      for (const level of candidates) {
+        const tolerance = Number.isFinite(tick) && tick > 0
+          ? tick / 2
+          : Math.max(1e-10, Math.abs(level.price) * 1e-8);
+        const duplicate = existing.some((item) => Math.abs(item.price - level.price) <= tolerance)
+          || createdPrices.some((price) => Math.abs(price - level.price) <= tolerance);
+        if (duplicate) continue;
+        await api(
+          '/api/drawings/levels',
+          json('POST', { symbol: ui.symbol, price: level.price, label: null }),
+        );
+        createdPrices.push(level.price);
+      }
+      return { created: createdPrices.length };
+    },
+    onSuccess: ({ created }) => {
+      void qc.invalidateQueries({ queryKey: ['manual-levels', ui.symbol] });
+      setFreezeFeedback(
+        created > 0
+          ? t('Saved {count} visible levels', { count: created })
+          : t('All visible levels are already manual'),
+      );
+      window.setTimeout(() => setFreezeFeedback(null), 3000);
     },
   });
 
@@ -275,7 +310,17 @@ export default function ChartPage() {
 
   useEffect(() => {
     setLivePrice(null);
+    setViewportAutoLevels([]);
+    setFreezeFeedback(null);
   }, [ui.symbol]);
+
+  const handleVisibleAutoLevelsChange = useCallback((next: AutoLevel[]) => {
+    setViewportAutoLevels((current) => {
+      const a = current.map((level) => `${level.type}:${level.price}`).join('|');
+      const b = next.map((level) => `${level.type}:${level.price}`).join('|');
+      return a === b ? current : next;
+    });
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -370,6 +415,7 @@ export default function ChartPage() {
     delAlert.error,
     updateAlert.error,
     updateTradingLine.error,
+    freezeVisibleLevels.error,
   ].find(Boolean) as Error | undefined;
 
   const priceChange = (selectedTicker?.price24hPcnt || 0) * 100;
@@ -421,6 +467,16 @@ export default function ChartPage() {
       <div className="toolbar">
         {tool('select', MousePointer2, 'Select')}
         {tool('level', Plus, 'Level')}
+        <button
+          type="button"
+          className="tool-btn"
+          disabled={!viewportAutoLevels.length || freezeVisibleLevels.isPending}
+          onClick={() => freezeVisibleLevels.mutate(viewportAutoLevels)}
+          title={t('Copies automatic levels currently visible on the chart into Manual Levels')}
+        >
+          <Pin size={15} />
+          {freezeVisibleLevels.isPending ? t('Saving…') : t('Freeze levels')}
+        </button>
         {tool('risk-reward', Ratio, 'Risk/Reward')}
         {tool('alert', Bell, 'Alert')}
 
@@ -431,7 +487,7 @@ export default function ChartPage() {
               ? t('Click repeatedly to create alerts · Esc to finish')
               : ui.tool === 'risk-reward'
                 ? t('Click Entry → Stop · Target is created automatically')
-                : null}
+                : freezeFeedback}
         </span>
 
         <div className="chart-overlay-toggles" aria-label={t('Trading overlays')}>
@@ -499,6 +555,7 @@ export default function ChartPage() {
           onDeleteRiskReward={(id) => delRR.mutate(id)}
           onRequestTradingLineChange={requestTradingLineChange}
           onUsePriceLevel={(price) => ui.openCalculatorAtPrice(price)}
+          onVisibleAutoLevelsChange={handleVisibleAutoLevelsChange}
           onLivePrice={(price) => setLivePrice(price)}
         />
 

@@ -50,6 +50,7 @@ interface Props {
   onDeleteRiskReward: (id: number) => void;
   onRequestTradingLineChange: (line: TradingOverlayLine, price: number) => void;
   onUsePriceLevel: (price: number) => void;
+  onVisibleAutoLevelsChange?: (levels: AutoLevel[]) => void;
   onLivePrice?: (price: number) => void;
 }
 
@@ -358,6 +359,8 @@ export default function TradingChart(p: Props) {
   const onCreateAlertRef = useRef(p.onCreateAlert);
   const onCreateRiskRewardRef = useRef(p.onCreateRiskReward);
   const onLivePriceRef = useRef(p.onLivePrice);
+  const onVisibleAutoLevelsChangeRef = useRef(p.onVisibleAutoLevelsChange);
+  const visibleAutoSignatureRef = useRef('');
   const [rrDraft, setRrDraft] = useState<RrDraft>({});
   const rrDraftRef = useRef<RrDraft>({});
   const [rrHover, setRrHover] = useState<RrHover>(null);
@@ -383,6 +386,7 @@ export default function TradingChart(p: Props) {
   onCreateAlertRef.current = p.onCreateAlert;
   onCreateRiskRewardRef.current = p.onCreateRiskReward;
   onLivePriceRef.current = p.onLivePrice;
+  onVisibleAutoLevelsChangeRef.current = p.onVisibleAutoLevelsChange;
   rrDraftRef.current = rrDraft;
   priceDragRef.current = priceDrag;
   tradingDragRef.current = tradingDrag;
@@ -690,6 +694,23 @@ export default function TradingChart(p: Props) {
       observer.disconnect();
     };
   }, [chart, p.symbol, p.timeframe]);
+
+  useEffect(() => {
+    if (!series || !hostRef.current) return;
+    const callback = onVisibleAutoLevelsChangeRef.current;
+    if (!callback) return;
+    const height = hostRef.current.clientHeight;
+    const visible = p.autoLevels.filter((level) => {
+      const y = series.priceToCoordinate(level.price);
+      if (y === null) return false;
+      const value = Number(y);
+      return Number.isFinite(value) && value >= 0 && value <= height;
+    });
+    const signature = `${p.symbol}|${visible.map((level) => `${level.type}:${level.price}`).join('|')}`;
+    if (signature === visibleAutoSignatureRef.current) return;
+    visibleAutoSignatureRef.current = signature;
+    callback(visible);
+  }, [series, p.autoLevels, overlayVersion, p.symbol, p.timeframe]);
 
   useEffect(() => {
     const host = hostRef.current;

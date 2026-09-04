@@ -75,6 +75,7 @@ const uk: Dict = {
 
 
 Object.assign(ru, {
+  'Freeze levels':'Зафиксировать уровни','Copies automatic levels currently visible on the chart into Manual Levels':'Копирует только видимые сейчас автоматические уровни в ручные.','Saved {count} visible levels':'Сохранено видимых уровней: {count}','All visible levels are already manual':'Все видимые уровни уже сохранены вручную.',
   'Neutral chart controls use automatic contrast, so white objects do not disappear on a light background.':'Нейтральные элементы графика используют автоконтраст, поэтому светлые объекты не пропадают на светлом фоне.',
   'Custom color':'Свой цвет',
   'R/R is created with two clicks: Entry → Stop. Direction is detected automatically and Target is created at the default R multiple.':'R/R создаётся двумя кликами: Entry → Stop. Направление определяется автоматически, а Target ставится по R по умолчанию.',
@@ -92,6 +93,7 @@ Object.assign(ru, {
   'This Stop is already on the triggered side of the market. Auto would use {type}.':'Этот Stop уже находится на сработавшей стороне рынка. Авто использовало бы {type}.'
 });
 Object.assign(uk, {
+  'Freeze levels':'Зафіксувати рівні','Copies automatic levels currently visible on the chart into Manual Levels':'Копіює лише видимі зараз автоматичні рівні в ручні.','Saved {count} visible levels':'Збережено видимих рівнів: {count}','All visible levels are already manual':'Усі видимі рівні вже збережені вручну.',
   'Neutral chart controls use automatic contrast, so white objects do not disappear on a light background.':'Нейтральні елементи графіка використовують автоконтраст, тому світлі об’єкти не зникають на світлому фоні.',
   'Custom color':'Свій колір',
   'R/R is created with two clicks: Entry → Stop. Direction is detected automatically and Target is created at the default R multiple.':'R/R створюється двома кліками: Entry → Stop. Напрямок визначається автоматично, а Target ставиться за R за замовчуванням.',
