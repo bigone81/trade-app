@@ -25,7 +25,7 @@ import { useUi } from '../store';
 import TradingChart from '../components/TradingChart';
 import CalculatorDrawer from '../components/CalculatorDrawer';
 import ConfirmDialog from '../components/ConfirmDialog';
-import { buildTradingOverlayLines } from '../tradeGrouping';
+import { buildTradingOverlayLines, groupActiveOrders } from '../tradeGrouping';
 import { usePreferences } from '../preferences';
 import { useI18n } from '../i18n';
 
@@ -53,12 +53,13 @@ export default function ChartPage() {
   const qc = useQueryClient();
   const ui = useUi();
   const { preferences, save: savePreferences } = usePreferences();
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [tickerSearch, setTickerSearch] = useState('');
   const [livePrice, setLivePrice] = useState<number | null>(null);
   const [viewportAutoLevels, setViewportAutoLevels] = useState<AutoLevel[]>([]);
   const [freezeFeedback, setFreezeFeedback] = useState<string | null>(null);
   const [pendingTradingChange, setPendingTradingChange] = useState<{ line: TradingOverlayLine; price: number } | null>(null);
+  const [pendingTradingCancel, setPendingTradingCancel] = useState<TradingOverlayLine[] | null>(null);
 
   const config = useQuery<{
     accounts: AccountPublic[];
@@ -302,10 +303,81 @@ export default function ChartPage() {
     },
   });
 
+  const cancelTradingOrders = useMutation({
+    mutationFn: async (lines: TradingOverlayLine[]) => {
+      const unique = new Map<string, TradingOverlayLine>();
+      for (const line of lines) {
+        if (!line.orderId || (line.kind !== 'order' && line.kind !== 'trigger')) continue;
+        unique.set(`${line.accountId}:${line.orderId}`, line);
+      }
+
+      const grouped = groupActiveOrders(tradeOrders.data || []);
+      const groupByOrder = new Map(
+        grouped.map((item) => [`${item.main.accountId}:${item.main.orderId}`, item] as const),
+      );
+
+      const results = [];
+      for (const line of unique.values()) {
+        const group = groupByOrder.get(`${line.accountId}:${line.orderId}`);
+        const orderIds = [...new Set([
+          ...(group?.children.map((child) => child.orderId) || []),
+          line.orderId!,
+        ])];
+        results.push(await api('/api/trade/orders/cancel-group', json('POST', {
+          accountId: line.accountId,
+          symbol: line.symbol,
+          orderIds,
+        })));
+      }
+      return results;
+    },
+    onSuccess: () => {
+      setPendingTradingCancel(null);
+      window.setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ['chart-trade-orders'] });
+        void qc.invalidateQueries({ queryKey: ['orders'] });
+      }, 350);
+    },
+  });
+
   const requestTradingLineChange = (line: TradingOverlayLine, price: number) => {
     if (!Number.isFinite(price) || price <= 0 || !line.editTarget) return;
     if (preferences.tradingOverlays.confirmChanges) setPendingTradingChange({ line, price });
     else updateTradingLine.mutate({ line, price });
+  };
+
+  const requestCancelTradingOrders = (lines: TradingOverlayLine[]) => {
+    if (!config.data?.liveTradingEnabled) return;
+    const unique = [...new Map(
+      lines
+        .filter((line) => line.orderId && (line.kind === 'order' || line.kind === 'trigger'))
+        .map((line) => [`${line.accountId}:${line.orderId}`, line] as const),
+    ).values()];
+    if (unique.length) setPendingTradingCancel(unique);
+  };
+
+  const cancelOrderLabel = (count: number) => {
+    if (language === 'uk') {
+      const mod10 = count % 10;
+      const mod100 = count % 100;
+      const word = mod10 === 1 && mod100 !== 11
+        ? 'ордер'
+        : mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)
+          ? 'ордери'
+          : 'ордерів';
+      return `Скасувати ${count} ${word}`;
+    }
+    if (language === 'ru') {
+      const mod10 = count % 10;
+      const mod100 = count % 100;
+      const word = mod10 === 1 && mod100 !== 11
+        ? 'ордер'
+        : mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)
+          ? 'ордера'
+          : 'ордеров';
+      return `Отменить ${count} ${word}`;
+    }
+    return `Cancel ${count} ${count === 1 ? 'order' : 'orders'}`;
   };
 
   useEffect(() => {
@@ -415,6 +487,7 @@ export default function ChartPage() {
     delAlert.error,
     updateAlert.error,
     updateTradingLine.error,
+    cancelTradingOrders.error,
     freezeVisibleLevels.error,
   ].find(Boolean) as Error | undefined;
 
@@ -554,6 +627,7 @@ export default function ChartPage() {
           onDeleteAlert={(id) => delAlert.mutate(id)}
           onDeleteRiskReward={(id) => delRR.mutate(id)}
           onRequestTradingLineChange={requestTradingLineChange}
+          onRequestCancelTradingOrders={requestCancelTradingOrders}
           onUsePriceLevel={(price) => ui.openCalculatorAtPrice(price)}
           onVisibleAutoLevelsChange={handleVisibleAutoLevelsChange}
           onLivePrice={(price) => setLivePrice(price)}
@@ -680,6 +754,23 @@ export default function ChartPage() {
         body={pendingTradingChange ? <>
           <b>{pendingTradingChange.line.symbol}</b> · {pendingTradingChange.line.accountName}<br />
           {pendingTradingChange.line.kind.toUpperCase()} {num(pendingTradingChange.line.price, 8)} → <b>{num(pendingTradingChange.price, 8)}</b>
+        </> : null}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingTradingCancel)}
+        title={pendingTradingCancel ? cancelOrderLabel(pendingTradingCancel.length) : t('Cancel order')}
+        danger
+        confirmLabel={pendingTradingCancel ? cancelOrderLabel(pendingTradingCancel.length) : t('Cancel order')}
+        onClose={() => setPendingTradingCancel(null)}
+        onConfirm={() => { if (pendingTradingCancel) cancelTradingOrders.mutate(pendingTradingCancel); }}
+        body={pendingTradingCancel ? <>
+          <b>{pendingTradingCancel[0]?.symbol || ui.symbol}</b><br />
+          {language === 'uk'
+            ? 'Буде скасовано вибрані очікуючі ордери та прив’язані до них SL/TP.'
+            : language === 'ru'
+              ? 'Будут отменены выбранные ожидающие ордера и привязанные к ним SL/TP.'
+              : 'The selected pending orders and their attached SL/TP will be cancelled.'}
         </> : null}
       />
     </div>

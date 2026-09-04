@@ -122,3 +122,6 @@ html[data-theme="light"] .chart-overlay-popover{background:#fff;border-color:#d3
 }
 
 .tool-btn:disabled{opacity:.35;cursor:not-allowed}.tool-btn:disabled:hover{background:transparent;color:#8390a3}
+
+/* EdgeDesk v15.9 — cancel pending orders directly from chart labels */
+.trading-edge-label-text{pointer-events:none}.trading-order-cancel{position:absolute;right:calc(100% + 3px);top:50%;transform:translateY(-50%);width:16px;height:16px;padding:0;border:0;border-radius:3px;background:#111827cc;color:#fff;font:900 13px/16px Arial,sans-serif;text-align:center;cursor:pointer;opacity:0;pointer-events:none;transition:opacity .08s,background .08s;box-shadow:0 1px 3px #0008}.trading-edge-label:hover .trading-order-cancel,.trading-order-cancel:focus-visible{opacity:1;pointer-events:auto}.trading-order-cancel:hover{background:#b42335}.trading-order-cancel:active{transform:translateY(calc(-50% + 1px))}

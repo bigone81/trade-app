@@ -49,6 +49,7 @@ interface Props {
   onDeleteAlert: (id: number) => void;
   onDeleteRiskReward: (id: number) => void;
   onRequestTradingLineChange: (line: TradingOverlayLine, price: number) => void;
+  onRequestCancelTradingOrders: (lines: TradingOverlayLine[]) => void;
   onUsePriceLevel: (price: number) => void;
   onVisibleAutoLevelsChange?: (levels: AutoLevel[]) => void;
   onLivePrice?: (price: number) => void;
@@ -1129,6 +1130,16 @@ export default function TradingChart(p: Props) {
     return false;
   };
 
+  const canCancelTradingGroup = (group: TradingLineGroup) => {
+    if (!p.liveTradingEnabled || group.lines.some((item) => !item.orderId)) return false;
+    const line = group.representative;
+    if (line.kind === 'order') return true;
+    if (line.kind !== 'trigger') return false;
+    // Stop Market has no separate entry-price line, so its trigger is the
+    // cancellation anchor. Stop Limit is cancelled from its ENTRY line.
+    return String(line.orderType || '').toLowerCase().includes('market');
+  };
+
   const startTradingDrag = (line: TradingOverlayLine, event: any) => {
     if (!canDragTradingLine(line) || !hostRef.current) return;
     event.stopPropagation();
@@ -1528,6 +1539,7 @@ export default function TradingChart(p: Props) {
               const group = placement.group;
               const line = group.representative;
               const draggable = group.lines.length === 1 && canDragTradingLine(line);
+              const cancelable = canCancelTradingGroup(group);
               const linked = hoveredTradingLinks.size > 0 && group.linkKeys.some((key) => hoveredTradingLinks.has(key));
               const muted = hoveredTradingLinks.size > 0 && !linked;
               const tooltipUp = placement.labelY > hostRef.current!.clientHeight * 0.62;
@@ -1547,7 +1559,25 @@ export default function TradingChart(p: Props) {
                   onMouseLeave={() => setHoveredTradingGroupKey((current) => current === group.key ? null : current)}
                   onPointerDown={(event) => { if (draggable) startTradingDrag(line, event); }}
                 >
-                  {placement.text}
+                  <span className="trading-edge-label-text">{placement.text}</span>
+                  {cancelable && (
+                    <button
+                      type="button"
+                      className="trading-order-cancel"
+                      title={t('Cancel')}
+                      aria-label={t('Cancel')}
+                      onPointerDown={(event) => {
+                        event.stopPropagation();
+                        event.preventDefault();
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        p.onRequestCancelTradingOrders(group.lines);
+                      }}
+                    >
+                      ×
+                    </button>
+                  )}
                 </div>
               );
             })}
