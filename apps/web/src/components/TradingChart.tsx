@@ -69,6 +69,7 @@ type TradingDrag = { line: TradingOverlayLine; originalPrice: number; price: num
 type WsState = 'connecting' | 'live' | 'reconnecting' | 'offline';
 
 const DEFAULT_FUTURE_BARS = 24;
+const DEFAULT_BAR_SPACING = 6;
 
 const decimalsFromTickSize = (tickSize: string) => {
   const text = String(tickSize || '').trim().toLowerCase();
@@ -742,7 +743,10 @@ export default function TradingChart(p: Props) {
       // explicitly restore autoscale and return the time axis to the live edge.
       window.requestAnimationFrame(() => {
         series.priceScale().applyOptions({ autoScale: true });
-        chart.timeScale().applyOptions({ rightOffset: futureBars });
+        chart.timeScale().applyOptions({
+          barSpacing: DEFAULT_BAR_SPACING,
+          rightOffset: futureBars,
+        });
         chart.timeScale().scrollToRealTime();
         followLiveRef.current = true;
         setIsAtLiveEdge(true);
