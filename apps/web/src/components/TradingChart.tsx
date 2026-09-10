@@ -40,6 +40,7 @@ interface Props {
   tickSize: string | null;
   onCreateLevel: (price: number) => void;
   onCreateAlert: (price: number) => void;
+  onCreateLevelAlert: (price: number, sourceType: 'automatic_level' | 'manual_level', sourceId: number | null) => void;
   onCreateRiskReward: (r: Omit<RiskReward, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onSelectRiskReward: (r: RiskReward) => void;
   onUpdateRiskReward: (id: number, p: Partial<RiskReward>) => void;
@@ -371,6 +372,7 @@ export default function TradingChart(p: Props) {
   const [tradingDrag, setTradingDrag] = useState<TradingDrag | null>(null);
   const tradingDragRef = useRef<TradingDrag | null>(null);
   const [hoveredTradingGroupKey, setHoveredTradingGroupKey] = useState<string | null>(null);
+  const [hoveredLevelAlertKey, setHoveredLevelAlertKey] = useState<string | null>(null);
   const [overlayVersion, setOverlayVersion] = useState(0);
   const [wsState, setWsState] = useState<WsState>('connecting');
   const [isAtLiveEdge, setIsAtLiveEdge] = useState(true);
@@ -1198,6 +1200,56 @@ export default function TradingChart(p: Props) {
     return new Set(group?.linkKeys || []);
   }, [visibleTradingGroups, hoveredTradingGroupKey]);
 
+  const levelAlertTolerance = (price: number) => {
+    const tick = Number(p.tickSize || 0);
+    return Number.isFinite(tick) && tick > 0
+      ? tick / 2
+      : Math.max(1e-10, Math.abs(price) * 1e-8);
+  };
+
+  const activeAlertAtLevel = (price: number) =>
+    p.alerts.find((alert) =>
+      alert.active && Math.abs(alert.price - price) <= levelAlertTolerance(price),
+    ) || null;
+
+  const renderLevelAlertBell = (
+    key: string,
+    price: number,
+    y: number,
+    sourceType: 'automatic_level' | 'manual_level',
+    sourceId: number | null,
+    x: number,
+  ) => {
+    const existing = activeAlertAtLevel(price);
+    const visible = hoveredLevelAlertKey === key || Boolean(existing);
+    if (!visible) return null;
+    const title = existing
+      ? `${t('Alert already exists at this level')} · ${formatPriceByTick(price, p.tickSize)}`
+      : `${t('Create alert at level')} · ${formatPriceByTick(price, p.tickSize)}`;
+    return (
+      <g
+        className={`level-alert-bell${existing ? ' active' : ''}`}
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!existing) p.onCreateLevelAlert(price, sourceType, sourceId);
+        }}
+      >
+        <title>{title}</title>
+        <circle cx={x} cy={y} r="10" />
+        <path
+          d="M18 8a6 6 0 0 0-12 0c0 4.499-1.411 5.956-2.738 7.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .738-1.674C19.411 13.956 18 12.499 18 8"
+          transform={`translate(${x - 6} ${y - 6}) scale(.5)`}
+        />
+        <path
+          d="M10.268 21a2 2 0 0 0 3.464 0"
+          transform={`translate(${x - 6} ${y - 6}) scale(.5)`}
+        />
+      </g>
+    );
+  };
+
+
   useEffect(() => {
     const overlay = preferences.tradingOverlays;
     const highlightedWidth = Math.min(3, overlay.lineWidth + 1) as 1 | 2 | 3;
@@ -1414,25 +1466,42 @@ export default function TradingChart(p: Props) {
           {p.autoLevels.map((level, index) => {
             const y = series.priceToCoordinate(level.price);
             if (y === null) return null;
+            const key = `auto:${level.type}:${level.price}:${index}`;
+            const width = hostRef.current!.clientWidth;
+            const bellX = Math.max(20, width - 128);
             return (
-              <rect
+              <g
                 key={`auto-hit-${index}`}
-                x="0"
-                y={y - 5}
-                width={hostRef.current!.clientWidth}
-                height="10"
-                fill="transparent"
-                className={
-                  p.tool === 'select'
-                    ? 'price-line-click-target active'
-                    : 'price-line-click-target'
-                }
-                onPointerDown={(event) => {
-                  if (p.tool !== 'select') return;
-                  event.stopPropagation();
-                  p.onUsePriceLevel(level.price);
-                }}
-              />
+                onPointerEnter={() => setHoveredLevelAlertKey(key)}
+                onPointerLeave={() => setHoveredLevelAlertKey((current) => current === key ? null : current)}
+              >
+                <rect
+                  x="0"
+                  y={y - 5}
+                  width={width}
+                  height="10"
+                  fill="transparent"
+                  className={
+                    p.tool === 'select'
+                      ? 'price-line-click-target active'
+                      : 'price-line-click-target'
+                  }
+                  onPointerDown={(event) => {
+                    if (p.tool !== 'select') return;
+                    event.stopPropagation();
+                    p.onUsePriceLevel(level.price);
+                  }}
+                />
+                <rect
+                  x={Math.max(0, width - 214)}
+                  y={y - 10}
+                  width="98"
+                  height="20"
+                  fill="transparent"
+                  className="level-alert-hover-target"
+                />
+                {renderLevelAlertBell(key, level.price, y, 'automatic_level', null, bellX)}
+              </g>
             );
           })}
 
@@ -1444,8 +1513,14 @@ export default function TradingChart(p: Props) {
             const y = series.priceToCoordinate(shownPrice);
             if (y === null) return null;
             const x = Math.max(20, hostRef.current!.clientWidth - 82);
+            const key = `manual:${level.id}`;
+            const bellX = Math.max(20, hostRef.current!.clientWidth - 128);
             return (
-              <g key={`manual-hit-${level.id}`}>
+              <g
+                key={`manual-hit-${level.id}`}
+                onPointerEnter={() => setHoveredLevelAlertKey(key)}
+                onPointerLeave={() => setHoveredLevelAlertKey((current) => current === key ? null : current)}
+              >
                 <rect
                   x="0"
                   y={y - 7}
@@ -1469,6 +1544,7 @@ export default function TradingChart(p: Props) {
                     ×
                   </text>
                 </g>
+                {renderLevelAlertBell(key, shownPrice, y, 'manual_level', level.id, bellX)}
               </g>
             );
           })}

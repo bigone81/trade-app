@@ -111,6 +111,15 @@ Object.assign(uk, {
   'This Stop is already on the triggered side of the market. Auto would use {type}.':'Цей Stop уже знаходиться на спрацьованому боці ринку. Авто використало б {type}.'
 });
 
+Object.assign(ru, {
+  'Create alert at level':'Создать алерт на уровне',
+  'Alert already exists at this level':'На этом уровне уже есть алерт',
+});
+Object.assign(uk, {
+  'Create alert at level':'Створити сповіщення на рівні',
+  'Alert already exists at this level':'На цьому рівні вже є сповіщення',
+});
+
 const dictionaries: Record<AppLanguage, Dict> = { en: {}, uk, ru };
 
 export function translate(language: AppLanguage, key: string, vars?: Vars): string {

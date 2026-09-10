@@ -240,18 +240,38 @@ export default function ChartPage() {
   });
 
   const addAlert = useMutation({
-    mutationFn: (price: number) =>
-      api(
+    mutationFn: async (input: number | {
+      price: number;
+      sourceType: 'automatic_level' | 'manual_level';
+      sourceId: number | null;
+      dedupe: true;
+    }) => {
+      const price = typeof input === 'number' ? input : input.price;
+      if (typeof input !== 'number' && input.dedupe) {
+        const existing = await api<AlertRecord[]>(`/api/alerts?symbol=${ui.symbol}`);
+        const tick = Number(instrument.data?.tickSize || 0);
+        const tolerance = Number.isFinite(tick) && tick > 0
+          ? tick / 2
+          : Math.max(1e-10, Math.abs(price) * 1e-8);
+        const duplicate = existing.find((alert) =>
+          alert.active && Math.abs(alert.price - price) <= tolerance,
+        );
+        if (duplicate) return duplicate;
+      }
+      return api<AlertRecord>(
         '/api/alerts',
         json('POST', {
           symbol: ui.symbol,
           price,
           condition: 'touch',
           preAlertPercent: 0.25,
+          sourceType: typeof input === 'number' ? 'manual' : input.sourceType,
+          sourceId: typeof input === 'number' ? null : input.sourceId,
           telegramEnabled: true,
           triggerOnce: true,
         }),
-      ),
+      );
+    },
     onSuccess: () => {
       invalidate();
       // Keep Alert tool active. The database already supports many independent
@@ -618,6 +638,7 @@ export default function ChartPage() {
           tickSize={instrument.data?.tickSize ?? null}
           onCreateLevel={(price) => addLevel.mutate(price)}
           onCreateAlert={(price) => addAlert.mutate(price)}
+          onCreateLevelAlert={(price, sourceType, sourceId) => addAlert.mutate({ price, sourceType, sourceId, dedupe: true })}
           onCreateRiskReward={(input) => addRR.mutate(input)}
           onSelectRiskReward={(item) => ui.selectRiskReward(item)}
           onUpdateRiskReward={(id, patch) => updateRR.mutate({ id, patch })}
