@@ -725,18 +725,42 @@ export default function TradingChart(p: Props) {
       });
     };
     const pointerMove = (event: PointerEvent) => { if (event.buttons) redraw(); };
+    const doubleClick = (event: MouseEvent) => {
+      redraw();
+      if (!chart || !series) return;
+
+      const scaleApi = chart.priceScale('right') as any;
+      const measuredScaleWidth = Number(scaleApi.width?.() || 0);
+      const scaleWidth = Number.isFinite(measuredScaleWidth) && measuredScaleWidth > 0
+        ? measuredScaleWidth
+        : 64;
+      const bounds = host.getBoundingClientRect();
+      const x = event.clientX - bounds.left;
+      if (x < host.clientWidth - scaleWidth) return;
+
+      // Keep Lightweight Charts' native price-axis double-click behavior, then
+      // explicitly restore autoscale and return the time axis to the live edge.
+      window.requestAnimationFrame(() => {
+        series.priceScale().applyOptions({ autoScale: true });
+        chart.timeScale().applyOptions({ rightOffset: futureBars });
+        chart.timeScale().scrollToRealTime();
+        followLiveRef.current = true;
+        setIsAtLiveEdge(true);
+        setOverlayVersion((value) => value + 1);
+      });
+    };
     host.addEventListener('pointermove', pointerMove);
     host.addEventListener('pointerup', redraw);
     host.addEventListener('wheel', redraw, { passive: true });
-    host.addEventListener('dblclick', redraw);
+    host.addEventListener('dblclick', doubleClick);
     return () => {
       if (frame) window.cancelAnimationFrame(frame);
       host.removeEventListener('pointermove', pointerMove);
       host.removeEventListener('pointerup', redraw);
       host.removeEventListener('wheel', redraw);
-      host.removeEventListener('dblclick', redraw);
+      host.removeEventListener('dblclick', doubleClick);
     };
-  }, [chart, series]);
+  }, [chart, series, futureBars]);
 
   useEffect(() => {
     if (!series) return;
