@@ -381,6 +381,11 @@ export default function TradingChart(p: Props) {
   const lastPriceReportAtRef = useRef(0);
   const restoringViewRef = useRef(false);
   const saveViewTimerRef = useRef<number | null>(null);
+  const viewSymbolRef = useRef(p.symbol);
+  const pendingSymbolLiveRef = useRef(false);
+  const appliedViewKeyRef = useRef<string | null>(null);
+  const appliedViewChartRef = useRef<IChartApi | null>(null);
+  const viewRestoreTimerRef = useRef<number | null>(null);
   const snapPricesRef = useRef<number[]>([]);
   const rrPreferencesRef = useRef(preferences.riskReward);
 
@@ -1008,28 +1013,69 @@ export default function TradingChart(p: Props) {
 
 
   useEffect(() => {
-    if (!chart || !p.candles.length) return;
+    // Switching symbols always opens at the live edge. Do not restore the
+    // previous scroll position of a symbol when returning to it later.
+    if (viewSymbolRef.current !== p.symbol) {
+      viewSymbolRef.current = p.symbol;
+      pendingSymbolLiveRef.current = true;
+      restoringViewRef.current = true;
+      if (saveViewTimerRef.current !== null) {
+        window.clearTimeout(saveViewTimerRef.current);
+        saveViewTimerRef.current = null;
+      }
+    }
+
+    if (!chart || !p.candles.length) return; // Wait for the selected symbol's candles.
+    if (appliedViewChartRef.current !== chart) {
+      appliedViewChartRef.current = chart;
+      appliedViewKeyRef.current = null;
+    }
+    const viewKey = `${p.symbol}|${p.timeframe}`;
+    // Incoming bars/refetches must not undo a user's manual pan or zoom.
+    if (!pendingSymbolLiveRef.current && appliedViewKeyRef.current === viewKey) return;
+
     restoringViewRef.current = true;
-    const stored = readChartView(p.symbol, p.timeframe);
-    if (stored) {
-      const step = timeframeSeconds(p.timeframe);
-      const restoredRange = {
-        from: logicalAtTime(p.candles, stored.fromTime, step),
-        to: logicalAtTime(p.candles, stored.toTime, step),
-      };
-      (chart.timeScale() as any).setVisibleLogicalRange(restoredRange);
-      const atEdge = restoredRange.to >= p.candles.length - 1 - 0.5;
-      followLiveRef.current = atEdge;
-      setIsAtLiveEdge(atEdge);
-    } else {
-      chart.timeScale().fitContent();
-      chart.timeScale().applyOptions({ rightOffset: futureBars });
+    if (viewRestoreTimerRef.current !== null) window.clearTimeout(viewRestoreTimerRef.current);
+
+    if (pendingSymbolLiveRef.current) {
+      // Restore both default zoom and live position on every symbol selection.
+      series?.priceScale().applyOptions({ autoScale: true });
+      chart.timeScale().applyOptions({ barSpacing: DEFAULT_BAR_SPACING, rightOffset: futureBars });
       chart.timeScale().scrollToRealTime();
       followLiveRef.current = true;
       setIsAtLiveEdge(true);
+      pendingSymbolLiveRef.current = false;
+    } else {
+      // Preserve the existing saved-view behavior when only timeframe changes.
+      const stored = readChartView(p.symbol, p.timeframe);
+      if (stored) {
+        const step = timeframeSeconds(p.timeframe);
+        const restoredRange = {
+          from: logicalAtTime(p.candles, stored.fromTime, step),
+          to: logicalAtTime(p.candles, stored.toTime, step),
+        };
+        chart.timeScale().setVisibleLogicalRange(restoredRange);
+        const atEdge = restoredRange.to >= p.candles.length - 1 - 0.5;
+        followLiveRef.current = atEdge;
+        setIsAtLiveEdge(atEdge);
+      } else {
+        chart.timeScale().fitContent();
+        chart.timeScale().applyOptions({ rightOffset: futureBars });
+        chart.timeScale().scrollToRealTime();
+        followLiveRef.current = true;
+        setIsAtLiveEdge(true);
+      }
     }
-    window.setTimeout(() => { restoringViewRef.current = false; }, 100);
-  }, [chart, p.symbol, p.timeframe, p.candles.length]);
+    appliedViewKeyRef.current = viewKey;
+    viewRestoreTimerRef.current = window.setTimeout(() => {
+      restoringViewRef.current = false;
+      viewRestoreTimerRef.current = null;
+    }, 100);
+  }, [chart, series, p.symbol, p.timeframe, p.candles.length, futureBars]);
+
+  useEffect(() => () => {
+    if (viewRestoreTimerRef.current !== null) window.clearTimeout(viewRestoreTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (p.tool !== 'risk-reward') {
