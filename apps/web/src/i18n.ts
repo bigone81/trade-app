@@ -156,3 +156,30 @@ export function localizeNotification<T extends {eventType:string;title:string;me
   else if(row.eventType==='connection.restored') title=language==='uk'?'З’єднання відновлено':language==='ru'?'Соединение восстановлено':'Connection restored';
   return {...row,title,message};
 }
+
+
+// EdgeDesk v15.15 — funding labels shown above the chart.
+Object.assign(uk, {
+  'Funding information':'Інформація про фінансування', 'Next':'Наступне',
+  'Funding rate':'Ставка фінансування',
+  'Longs pay shorts':'Лонги платять шортам',
+  'Shorts pay longs':'Шорти платять лонгам',
+  'Neutral funding rate':'Нульова ставка фінансування',
+  'Next funding':'Наступне фінансування',
+  'Estimated funding for open positions':'Орієнтовне фінансування за відкритими позиціями',
+  'Estimate only. Final rate and position value may change before settlement.':'Це лише оцінка. Ставка та розмір позиції можуть змінитися до нарахування.',
+  'Funding data unavailable':'Дані фінансування недоступні',
+  'Long':'Лонг', 'Short':'Шорт',
+});
+Object.assign(ru, {
+  'Funding information':'Информация о финансировании', 'Next':'Следующее',
+  'Funding rate':'Ставка финансирования',
+  'Longs pay shorts':'Лонги платят шортам',
+  'Shorts pay longs':'Шорты платят лонгам',
+  'Neutral funding rate':'Нулевая ставка финансирования',
+  'Next funding':'Следующее финансирование',
+  'Estimated funding for open positions':'Ориентировочное финансирование по открытым позициям',
+  'Estimate only. Final rate and position value may change before settlement.':'Это только оценка. Ставка и размер позиции могут измениться до начисления.',
+  'Funding data unavailable':'Данные финансирования недоступны',
+  'Long':'Лонг', 'Short':'Шорт',
+});

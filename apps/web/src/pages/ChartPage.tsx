@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
   Calculator,
+  Clock3,
   MousePointer2,
   Pin,
   Plus,
@@ -34,6 +35,8 @@ interface MarketTicker {
   lastPrice: number;
   price24hPcnt: number;
   turnover24h: number;
+  fundingRate: number | null;
+  nextFundingTime: number | null;
 }
 
 interface InstrumentRules {
@@ -41,6 +44,20 @@ interface InstrumentRules {
   tickSize: string;
   qtyStep: string;
 }
+
+const formatFundingCountdown = (milliseconds: number) => {
+  const remaining = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(remaining / 3600);
+  const minutes = Math.floor((remaining % 3600) / 60);
+  const seconds = remaining % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+};
+
+const formatFundingPayment = (amount: number) => {
+  const absolute = Math.abs(amount);
+  const digits = absolute > 0 && absolute < 0.01 ? 4 : 2;
+  return `${amount > 0 ? '+' : amount < 0 ? '−' : ''}$${num(absolute, digits)}`;
+};
 
 const formatTurnover = (value: number) => {
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
@@ -56,6 +73,7 @@ export default function ChartPage() {
   const { t, language } = useI18n();
   const [tickerSearch, setTickerSearch] = useState('');
   const [livePrice, setLivePrice] = useState<number | null>(null);
+  const [fundingClock, setFundingClock] = useState(() => Date.now());
   const [viewportAutoLevels, setViewportAutoLevels] = useState<AutoLevel[]>([]);
   const [freezeFeedback, setFreezeFeedback] = useState<string | null>(null);
   const [pendingTradingChange, setPendingTradingChange] = useState<{ line: TradingOverlayLine; price: number } | null>(null);
@@ -75,6 +93,11 @@ export default function ChartPage() {
     staleTime: 8_000,
     refetchInterval: 10_000,
   });
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setFundingClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const instrument = useQuery<InstrumentRules>({
     queryKey: ['instrument-rules', ui.symbol],
@@ -432,6 +455,34 @@ export default function ChartPage() {
   const currentPrice =
     livePrice || selectedTicker?.lastPrice || candles.data?.at(-1)?.close || 0;
 
+  const fundingRate = selectedTicker?.fundingRate;
+  const fundingTime = selectedTicker?.nextFundingTime;
+  const hasFunding = typeof fundingRate === 'number' && Number.isFinite(fundingRate)
+    && typeof fundingTime === 'number' && Number.isFinite(fundingTime) && fundingTime > 0;
+  const fundingCountdown = hasFunding ? formatFundingCountdown(fundingTime - fundingClock) : '—';
+  const fundingTimeLabel = hasFunding
+    ? new Intl.DateTimeFormat(language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US',
+        { dateStyle: 'short', timeStyle: 'short' }).format(fundingTime)
+    : '—';
+  const fundingTimeShort = hasFunding
+    ? new Intl.DateTimeFormat(language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US',
+        { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(fundingTime)
+    : '—';
+
+  // A position's estimated next payment uses mark price × size × the current
+  // indicative funding rate. A positive value means the user receives funds.
+  const fundingPositions = useMemo(() =>
+    (tradePositions.data || []).filter((p) => p.symbol === ui.symbol && p.size > 0),
+    [tradePositions.data, ui.symbol],
+  );
+  const fundingPayments = hasFunding ? fundingPositions.map((position) => ({
+    account: position.accountName,
+    side: position.side,
+    amount: position.size * (position.markPrice > 0 ? position.markPrice : position.avgPrice)
+      * fundingRate * (position.side === 'Buy' ? -1 : 1),
+  })) : [];
+  const fundingPaymentTotal = fundingPayments.reduce((sum, item) => sum + item.amount, 0);
+
   const levelReferencePrice =
     selectedTicker?.lastPrice || candles.data?.at(-1)?.close || currentPrice;
 
@@ -518,8 +569,40 @@ export default function ChartPage() {
   return (
     <div className="page chart-page">
       <div className="page-head">
-        <div>
-          <h1>{ui.symbol}</h1>
+        <div className="chart-head-info">
+          <div className="chart-heading-with-funding">
+            <h1>{ui.symbol}</h1>
+            <div className="funding-header" tabIndex={0} aria-label={t('Funding information')}>
+              <span className={hasFunding ? `funding-rate ${fundingRate > 0 ? 'positive' : fundingRate < 0 ? 'negative' : ''}` : 'funding-rate muted'}>
+                {hasFunding ? `${fundingRate > 0 ? '+' : ''}${(fundingRate * 100).toFixed(4)}%` : '—'}
+              </span>
+              <span className={`funding-timer ${hasFunding && fundingTime - fundingClock <= 5 * 60_000 ? 'funding-soon' : ''}`}>
+                <Clock3 size={14} aria-hidden="true" /> {fundingCountdown}
+              </span>
+              <span className="funding-next-time">{t('Next')}: {fundingTimeShort}</span>
+              <div className="funding-tooltip" role="tooltip">
+                <strong>{t('Funding rate')}: {hasFunding ? `${fundingRate > 0 ? '+' : ''}${(fundingRate * 100).toFixed(4)}%` : '—'}</strong>
+                {hasFunding ? (
+                  <>
+                    <div>{fundingRate > 0 ? t('Longs pay shorts') : fundingRate < 0 ? t('Shorts pay longs') : t('Neutral funding rate')}</div>
+                    <div>{t('Next funding')}: {fundingTimeLabel} · {fundingCountdown}</div>
+                    {fundingPayments.length > 0 && (
+                      <div className="funding-position-details">
+                        <strong>{t('Estimated funding for open positions')}: {formatFundingPayment(fundingPaymentTotal)}</strong>
+                        {fundingPayments.map((item, index) => (
+                          <div key={`${item.account}-${item.side}-${index}`} className="funding-position-row">
+                            <span>{item.account} · {item.side === 'Buy' ? t('Long') : t('Short')}</span>
+                            <span>{formatFundingPayment(item.amount)}</span>
+                          </div>
+                        ))}
+                        <small>{t('Estimate only. Final rate and position value may change before settlement.')}</small>
+                      </div>
+                    )}
+                  </>
+                ) : <div>{t('Funding data unavailable')}</div>}
+              </div>
+            </div>
+          </div>
           <p>{t('Market scanner · bars · automatic levels · persistent drawings')}</p>
         </div>
 

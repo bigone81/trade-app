@@ -98,7 +98,13 @@ export class BybitAdapter {
   }
   async getTickers(){
     const res=await this.publicClient.getTickers({category:'linear'});if(res.retCode!==0)throw new Error(res.retMsg||'Bybit ticker error');
-    return res.result.list.map((x:any)=>({symbol:x.symbol,lastPrice:num(x.lastPrice),price24hPcnt:num(x.price24hPcnt),turnover24h:num(x.turnover24h)}));
+    return res.result.list.map((x:any)=>({
+      symbol:x.symbol,lastPrice:num(x.lastPrice),price24hPcnt:num(x.price24hPcnt),turnover24h:num(x.turnover24h),
+      // The public linear ticker provides an indicative upcoming rate and a
+      // contract-specific settlement time (milliseconds since Unix epoch).
+      fundingRate:x.fundingRate!==undefined&&x.fundingRate!==null&&x.fundingRate!==''&&Number.isFinite(Number(x.fundingRate))?Number(x.fundingRate):null,
+      nextFundingTime:x.nextFundingTime&&Number.isFinite(Number(x.nextFundingTime))&&Number(x.nextFundingTime)>0?Number(x.nextFundingTime):null,
+    }));
   }
   async getLastPrice(symbol:string){
     const key=symbol.toUpperCase();
