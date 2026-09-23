@@ -235,7 +235,7 @@ const buildExecutionGroups = (
   if (!candles.length) return [];
   const allowed = (accountId: number) => !accountIds.length || accountIds.includes(accountId);
   const normalized = executions
-    .filter((execution) => execution.symbol === symbol && allowed(execution.accountId))
+    .filter((execution) => execution.execType === 'Trade' && execution.symbol === symbol && allowed(execution.accountId))
     .map((execution) => ({ execution, time: executionCandleTime(candles, Math.floor(execution.execTime / 1000), timeframe) }))
     .filter((row): row is { execution: TradeExecution; time: number } => row.time !== null);
 

@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AlertRecord, ManualLevel, RiskReward } from '@trade/shared';
+import { isRealTradeExecution } from '@trade/shared';
 
 export type SqliteDb = DatabaseSync;
 
@@ -532,6 +533,8 @@ export function syncJournalBybitOrder(db:SqliteDb,input:{accountId:number;accoun
 
 export function recordJournalBybitExecution(db:SqliteDb,input:{accountId:number;accountName:string;execution:any}){
   const x=input.execution||{};
+  // Defense in depth for callers other than the live worker.
+  if(!isRealTradeExecution(x.execType))return null;
   const execId=String(x.execId||'');
   if(!execId)return null;
   const orderId=String(x.orderId||'');

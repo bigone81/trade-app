@@ -10,6 +10,7 @@ import {
   type NotificationRecord,
 } from '@trade/database';
 import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
+import { isRealTradeExecution } from '@trade/shared';
 
 const db=openDatabase(process.env.DATABASE_PATH || './data/trade.sqlite');
 const runtimeAccounts=discoverBybitAccounts(process.env);
@@ -156,7 +157,10 @@ for(const account of runtimeAccounts){
     appendSystemEvent(db,{eventType:`bybit.${topic}.update`,accountId:id,symbol:Array.isArray(data?.data)&&data.data[0]?.symbol?data.data[0].symbol:null,message:`${name}: ${topic} update`,payload:data?.data});
     const rows=Array.isArray(data.data)?data.data:[];
     if(topic==='order')for(const x of rows){syncJournalBybitOrder(db,{accountId:id,accountName:name,order:x});tradingNotification(id,name,x);}
-    if(topic==='execution')for(const x of rows)recordJournalBybitExecution(db,{accountId:id,accountName:name,execution:x});
+    if(topic==='execution')for(const x of rows){
+      // Funding is a wallet cash movement, not a second Buy/Sell fill.
+      if(isRealTradeExecution(x?.execType))recordJournalBybitExecution(db,{accountId:id,accountName:name,execution:x});
+    }
   });
   ws.subscribeV5(['order','execution','position','wallet'],'linear');
 }

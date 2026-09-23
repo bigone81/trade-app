@@ -164,7 +164,12 @@ export interface TradeExecution {
   execQty: number;
   execFee: number;
   execTime: number;
+  /** Bybit V5 execution classification; chart and journal use Trade only. */
+  execType: string;
 }
+
+/** Funding, settlement and other account events are not order fills. */
+export const isRealTradeExecution = (execType: unknown): boolean => execType === 'Trade';
 
 export interface TradingOverlayLine {
   id: string;

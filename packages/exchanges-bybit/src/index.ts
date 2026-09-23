@@ -1,5 +1,5 @@
 import { RestClientV5, WebsocketClient } from 'bybit-api';
-import type { AccountId, ExchangeCapabilities, TradeExecution, TradeOrder, TradePosition } from '@trade/shared';
+import { isRealTradeExecution, type AccountId, type ExchangeCapabilities, type TradeExecution, type TradeOrder, type TradePosition } from '@trade/shared';
 import type { ExchangeAccountResolver, ExchangeAccountRuntime } from '@trade/exchanges-core';
 
 const num=(v:unknown)=>{const n=Number(v);return Number.isFinite(n)?n:0};
@@ -130,9 +130,44 @@ export class BybitAdapter {
     return (res.result.list as any[]).map(x=>({accountId:a.id,accountName:a.name,orderId:x.orderId,orderLinkId:x.orderLinkId||'',symbol:x.symbol,side:x.side,orderType:x.orderType,orderStatus:x.orderStatus,price:num(x.price),qty:num(x.qty),leavesQty:num(x.leavesQty),cumExecQty:num(x.cumExecQty),triggerPrice:nullable(x.triggerPrice),triggerDirection:nullable(x.triggerDirection),stopOrderType:x.stopOrderType?String(x.stopOrderType):null,stopLoss:nullable(x.stopLoss),takeProfit:nullable(x.takeProfit),reduceOnly:Boolean(x.reduceOnly),createdTime:num(x.createdTime),updatedTime:num(x.updatedTime)}));
   }
   async getExecutions(accountId:AccountId):Promise<TradeExecution[]>{
-    const a=this.getAccount(accountId),c=this.getPrivateClient(accountId);const res=await c.getExecutionList({category:'linear',limit:50} as any);
+    const a=this.getAccount(accountId),c=this.getPrivateClient(accountId);const res=await c.getExecutionList({category:'linear',execType:'Trade',limit:50} as any);
     if(res.retCode!==0)throw new Error(res.retMsg||'Execution query error');
-    return (res.result.list as any[]).map(x=>({accountId:a.id,accountName:a.name,execId:x.execId,orderId:x.orderId,symbol:x.symbol,side:x.side,execPrice:num(x.execPrice),execQty:num(x.execQty),execFee:num(x.execFee),execTime:num(x.execTime)}));
+    return (res.result.list as any[])
+      .filter(x=>isRealTradeExecution(x.execType))
+      .map(x=>({accountId:a.id,accountName:a.name,execId:x.execId,orderId:x.orderId,symbol:x.symbol,side:x.side,execPrice:num(x.execPrice),execQty:num(x.execQty),execFee:num(x.execFee),execTime:num(x.execTime),execType:String(x.execType)}));
+  }
+
+  /** Read actual signed funding from UTA transaction log, NOT from execution fees. */
+  async getFundingTransactions(accountId:AccountId,startTime:number,endTime:number){
+    const a=this.getAccount(accountId);
+    const c=this.getPrivateClient(accountId);
+    const rows:{id:string;accountId:number;accountName:string;symbol:string;currency:string;amount:number;time:number}[]=[];
+    const seenRows=new Set<string>();
+    let cursor='';
+    const seenCursors=new Set<string>();
+    // A maximum of seven days per Bybit request; no sum is advertised as complete if capped.
+    for(let page=0;page<20;page++){
+      const params:any={accountType:'UNIFIED',category:'linear',currency:'USDT',type:'SETTLEMENT',startTime,endTime,limit:50};
+      if(cursor)params.cursor=cursor;
+      const res=await c.getTransactionLog(params);
+      if(res.retCode!==0)throw new Error(res.retMsg||'Funding transaction query error');
+      for(const x of (res.result.list as any[]||[])){
+        const amount=Number(x.funding);
+        const time=Number(x.transactionTime);
+        if(x.type!=='SETTLEMENT'||!x.symbol||!Number.isFinite(amount)||!amount||!Number.isFinite(time))continue;
+        if(String(x.currency).toUpperCase()!=='USDT')continue;
+        const rowKey=`${String(x.id||'')}:${String(x.symbol)}:${time}`;
+        if(seenRows.has(rowKey))continue;
+        seenRows.add(rowKey);
+        rows.push({id:String(x.id||`${x.symbol}:${time}`),accountId:a.id,accountName:a.name,symbol:String(x.symbol),currency:'USDT',amount,time});
+      }
+      const next=String((res.result as any)?.nextPageCursor||'');
+      if(!next)return {rows,truncated:false};
+      if(seenCursors.has(next))throw new Error('Bybit repeated funding page cursor');
+      seenCursors.add(next);
+      cursor=next;
+    }
+    return {rows,truncated:true};
   }
   cancelOrder(accountId:AccountId,input:any){return this.getPrivateClient(accountId).cancelOrder({category:'linear',...input});}
   amendOrder(accountId:AccountId,input:any){return this.getPrivateClient(accountId).amendOrder({category:'linear',...input} as any);}

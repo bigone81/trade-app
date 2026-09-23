@@ -160,6 +160,29 @@ app.get('/api/trade/balances',async(req)=>{
 app.get('/api/trade/positions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getPositions(id).catch(()=>[])))).flat();});
 app.get('/api/trade/orders',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getOrders(id,false).catch(()=>[])))).flat();});
 app.get('/api/trade/executions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getExecutions(id).catch(()=>[])))).flat();});
+// Funding is a signed wallet transaction, not a trade execution. Only the latest
+// seven days are queried; show truncation/errors explicitly to avoid a false PnL.
+app.get('/api/journal/funding',async(req)=>{
+  const q=z.object({accountId:z.coerce.number().int().positive().optional(),symbol:z.string().regex(/^[A-Za-z0-9]{2,30}$/).optional()}).parse(req.query);
+  const ids=await accountIds(q.accountId);
+  const endTime=Date.now();
+  const startTime=endTime-7*24*60*60*1000;
+  const results=await Promise.all(ids.map(async id=>{
+    try{return {accountId:id,...await adapterFor(id).getFundingTransactions(id,startTime,endTime)};}
+    catch(error){return {accountId:id,rows:[],truncated:false,error:error instanceof Error?error.message:String(error)};}
+  }));
+  const rows=results.flatMap(result=>result.rows)
+    .filter(row=>!q.symbol||row.symbol.toUpperCase()===q.symbol.toUpperCase())
+    .sort((a,b)=>b.time-a.time);
+  return {
+    rows,
+    totalFundingUsdt:rows.reduce((sum,row)=>sum+row.amount,0),
+    currency:'USDT',periodStart:startTime,periodEnd:endTime,
+    truncated:results.some(result=>result.truncated),
+    errors:results.flatMap(result=>('error' in result && typeof result.error==='string')
+      ? [{accountId:result.accountId,error:result.error}] : []),
+  };
+});
 app.get('/api/trade/history',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getOrders(id,true).catch(()=>[])))).flat();});
 
 const requireLive=(reply:any)=>{if(!appConfig.liveTradingEnabled){reply.code(423).send({error:'Live trading actions are disabled. Set LIVE_TRADING_ENABLED=true explicitly.'});return false;}return true;};
