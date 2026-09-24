@@ -159,7 +159,11 @@ app.get('/api/trade/balances',async(req)=>{
 });
 app.get('/api/trade/positions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getPositions(id).catch(()=>[])))).flat();});
 app.get('/api/trade/orders',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getOrders(id,false).catch(()=>[])))).flat();});
-app.get('/api/trade/executions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getExecutions(id).catch(()=>[])))).flat();});
+app.get('/api/trade/executions',async(req)=>{
+  const q=z.object({accountId:z.coerce.number().int().positive().optional(),symbol:z.string().regex(/^[A-Z0-9]{2,30}$/).optional()}).parse(req.query);
+  const ids=await accountIds(q.accountId);
+  return (await Promise.all(ids.map(id=>adapterFor(id).getExecutions(id,q.symbol).catch(()=>[])))).flat();
+});
 // Funding is a signed wallet transaction, not a trade execution. Only the latest
 // seven days are queried; show truncation/errors explicitly to avoid a false PnL.
 app.get('/api/journal/funding',async(req)=>{

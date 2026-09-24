@@ -142,3 +142,10 @@ html[data-theme="light"] .funding-header{background:#f1f5fb;border-color:#cbd5e1
 @media(max-width:950px){.chart-heading-with-funding{gap:8px}.funding-header{gap:8px}.funding-tooltip{width:min(340px,calc(100vw - 110px))}}
 
 @media(max-width:1200px){.funding-next-time{display:none}}
+
+/* v15.17: non-interactive, historical Bybit entry-to-exit links.
+   The wide invisible stroke only enables a readable tooltip on hover. */
+.trade-connections-overlay{z-index:4;overflow:hidden}
+.trade-connection-path{fill:none;stroke-width:1.4;stroke-dasharray:5 4;stroke-linecap:round;opacity:.62;pointer-events:none}
+.trade-connection-hit{fill:none;stroke:transparent;stroke-width:11;pointer-events:stroke;cursor:help}
+.trade-connection:hover .trade-connection-path{stroke-width:2.2;opacity:1}

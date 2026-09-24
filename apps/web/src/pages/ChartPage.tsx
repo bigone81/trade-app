@@ -154,9 +154,9 @@ export default function ChartPage() {
   });
 
   const tradeExecutions = useQuery<TradeExecution[]>({
-    queryKey: ['chart-trade-executions'],
-    queryFn: () => api('/api/trade/executions'),
-    refetchInterval: 5_000,
+    queryKey: ['chart-trade-executions', ui.symbol],
+    queryFn: () => api(`/api/trade/executions?symbol=${encodeURIComponent(ui.symbol)}`),
+    refetchInterval: 30_000,
     enabled: preferences.tradingOverlays.showExecutions,
   });
 

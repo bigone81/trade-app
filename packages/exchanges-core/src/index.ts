@@ -20,7 +20,7 @@ export interface ExchangeAdapter {
   getAccountBalance(accountId: AccountId): Promise<unknown>;
   getPositions(accountId: AccountId): Promise<TradePosition[]>;
   getOrders(accountId: AccountId, history?: boolean): Promise<TradeOrder[]>;
-  getExecutions(accountId: AccountId): Promise<TradeExecution[]>;
+  getExecutions(accountId: AccountId, symbol?: string): Promise<TradeExecution[]>;
 }
 
 export type ExchangeAccountResolver = (accountId: AccountId) => ExchangeAccountRuntime;

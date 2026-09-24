@@ -49,6 +49,7 @@ export interface AppPreferences {
     showStopLoss: boolean;
     showTakeProfit: boolean;
     showExecutions: boolean;
+    showTradeConnections: boolean;
     showLiquidation: boolean;
     showAccountName: boolean;
     showOrderSize: boolean;
@@ -114,6 +115,7 @@ export const defaultPreferences: AppPreferences = {
     showStopLoss: true,
     showTakeProfit: true,
     showExecutions: true,
+    showTradeConnections: true,
     showLiquidation: false,
     showAccountName: true,
     showOrderSize: true,

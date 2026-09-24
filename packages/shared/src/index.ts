@@ -164,6 +164,8 @@ export interface TradeExecution {
   execQty: number;
   execFee: number;
   execTime: number;
+  /** Actual quantity closing an existing position (Bybit V5 execution.closedSize). */
+  closedSize?: number;
   /** Bybit V5 execution classification; chart and journal use Trade only. */
   execType: string;
 }

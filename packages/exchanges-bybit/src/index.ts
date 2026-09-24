@@ -129,12 +129,27 @@ export class BybitAdapter {
     if(res.retCode!==0)throw new Error(res.retMsg||'Order query error');
     return (res.result.list as any[]).map(x=>({accountId:a.id,accountName:a.name,orderId:x.orderId,orderLinkId:x.orderLinkId||'',symbol:x.symbol,side:x.side,orderType:x.orderType,orderStatus:x.orderStatus,price:num(x.price),qty:num(x.qty),leavesQty:num(x.leavesQty),cumExecQty:num(x.cumExecQty),triggerPrice:nullable(x.triggerPrice),triggerDirection:nullable(x.triggerDirection),stopOrderType:x.stopOrderType?String(x.stopOrderType):null,stopLoss:nullable(x.stopLoss),takeProfit:nullable(x.takeProfit),reduceOnly:Boolean(x.reduceOnly),createdTime:num(x.createdTime),updatedTime:num(x.updatedTime)}));
   }
-  async getExecutions(accountId:AccountId):Promise<TradeExecution[]>{
-    const a=this.getAccount(accountId),c=this.getPrivateClient(accountId);const res=await c.getExecutionList({category:'linear',execType:'Trade',limit:50} as any);
-    if(res.retCode!==0)throw new Error(res.retMsg||'Execution query error');
-    return (res.result.list as any[])
+  async getExecutions(accountId:AccountId,symbol?:string):Promise<TradeExecution[]>{
+    const a=this.getAccount(accountId),c=this.getPrivateClient(accountId);
+    const rows:any[]=[];
+    let cursor:string|undefined;
+    // Chart history needs opening fills as well as closing fills. Always filter
+    // by the selected symbol BEFORE paging to avoid consuming the 50 most
+    // recent fills of unrelated instruments. Cap requests to avoid rate spikes.
+    const pages=symbol?4:1;
+    for(let page=0;page<pages;page++){
+      const res=await c.getExecutionList({category:'linear',execType:'Trade',...(symbol?{symbol}:{}),limit:symbol?100:50,...(cursor?{cursor}:{})} as any);
+      if(res.retCode!==0)throw new Error(res.retMsg||'Execution query error');
+      const result=(res.result||{}) as any;
+      const batch=Array.isArray(result.list)?result.list:[];
+      rows.push(...batch);
+      const next=String(result.nextPageCursor||'');
+      if(!next||next===cursor||batch.length===0)break;
+      cursor=next;
+    }
+    return rows
       .filter(x=>isRealTradeExecution(x.execType))
-      .map(x=>({accountId:a.id,accountName:a.name,execId:x.execId,orderId:x.orderId,symbol:x.symbol,side:x.side,execPrice:num(x.execPrice),execQty:num(x.execQty),execFee:num(x.execFee),execTime:num(x.execTime),execType:String(x.execType)}));
+      .map(x=>({accountId:a.id,accountName:a.name,execId:x.execId,orderId:x.orderId,symbol:x.symbol,side:x.side,execPrice:num(x.execPrice),execQty:num(x.execQty),execFee:num(x.execFee),execTime:num(x.execTime),closedSize:num(x.closedSize),execType:String(x.execType)}));
   }
 
   /** Read actual signed funding from UTA transaction log, NOT from execution fees. */

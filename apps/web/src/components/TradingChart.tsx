@@ -21,6 +21,7 @@ import type {
   TradingOverlayLine,
 } from '@trade/shared';
 import RiskRewardOverlay from './RiskRewardOverlay';
+import { buildTradeConnections, type TradeConnection } from '../tradeConnections';
 import { readChartView, resolvedTheme, usePreferences, writeChartView } from '../preferences';
 import { useI18n } from '../i18n';
 
@@ -402,6 +403,11 @@ export default function TradingChart(p: Props) {
   timelineCandlesRef.current = timelineCandles;
   snapPricesRef.current = [...p.autoLevels.map((level) => level.price), ...p.manualLevels.map((level) => level.price)];
   rrPreferencesRef.current = preferences.riskReward;
+
+  const tradeConnections = useMemo(
+    () => buildTradeConnections(p.executions, p.symbol, preferences.tradingOverlays.accountIds),
+    [p.executions, p.symbol, preferences.tradingOverlays.accountIds],
+  );
 
   const executionGroups = useMemo(
     () => buildExecutionGroups(
@@ -1379,6 +1385,21 @@ export default function TradingChart(p: Props) {
   };
 
 
+  const tradeConnectionTooltip = (item: TradeConnection) => {
+    const priceChange = (item.exitPrice - item.entryPrice) / item.entryPrice * 100;
+    const directionChange = item.direction === 'long' ? priceChange : -priceChange;
+    const locale = language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US';
+    const date = (ms: number) => new Intl.DateTimeFormat(locale, {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+    }).format(new Date(ms));
+    return [
+      `${item.accountName} · ${item.direction.toUpperCase()} · ${compactNumber(item.qty)}`,
+      `${date(item.entryTime)} · ${formatPriceByTick(item.entryPrice, p.tickSize)}`,
+      `→ ${date(item.exitTime)} · ${formatPriceByTick(item.exitPrice, p.tickSize)}`,
+      `${directionChange >= 0 ? '+' : ''}${directionChange.toFixed(2)}% (${language === 'uk' ? 'рух ціни, не PnL' : language === 'ru' ? 'изменение цены, не PnL' : 'price movement, not PnL'})`,
+    ].join('\n');
+  };
+
   const timeToCoordinate = (time: number) => {
     if (!chart) return null;
     const direct = chart.timeScale().timeToCoordinate(time as UTCTimestamp);
@@ -1501,6 +1522,45 @@ export default function TradingChart(p: Props) {
         onUpdate={p.onUpdateRiskReward}
         onDelete={p.onDeleteRiskReward}
       />
+
+      {chart && series && hostRef.current && preferences.tradingOverlays.showExecutions && preferences.tradingOverlays.showTradeConnections && tradeConnections.length > 0 && (
+        <svg
+          className="chart-overlay trade-connections-overlay"
+          width={hostRef.current.clientWidth}
+          height={hostRef.current.clientHeight}
+          data-version={overlayVersion}
+          aria-label={language === 'uk' ? 'Зв’язки входів і виходів Bybit' : language === 'ru' ? 'Связи входов и выходов Bybit' : 'Bybit entry-to-exit connections'}
+        >
+          {tradeConnections.map((item) => {
+            const entrySeconds = item.entryTime / 1000;
+            const exitSeconds = item.exitTime / 1000;
+            if (executionCandleTime(timelineCandles, entrySeconds, p.timeframe) === null
+              || executionCandleTime(timelineCandles, exitSeconds, p.timeframe) === null) return null;
+            // Fractional logical coordinates preserve actual within-candle order;
+            // both fills can occur inside the same 1H candle.
+            const x1 = timeToCoordinate(entrySeconds);
+            const x2 = timeToCoordinate(exitSeconds);
+            const y1 = series.priceToCoordinate(item.entryPrice);
+            const y2 = series.priceToCoordinate(item.exitPrice);
+            if (x1 === null || x2 === null || y1 === null || y2 === null) return null;
+            const width = hostRef.current!.clientWidth - priceScaleWidth;
+            if (Math.max(x1, x2) < 0 || Math.min(x1, x2) > width) return null;
+            const height = hostRef.current!.clientHeight;
+            if (Math.max(y1, y2) < 0 || Math.min(y1, y2) > height) return null;
+            const movement = (item.exitPrice - item.entryPrice) * (item.direction === 'long' ? 1 : -1);
+            const color = movement >= 0 ? '#16b981' : '#f16d7e';
+            return (
+              <g className="trade-connection" key={item.id}>
+                <title>{tradeConnectionTooltip(item)}</title>
+                <path d={`M ${x1} ${y1} L ${x2} ${y2}`} stroke={color} className="trade-connection-path" />
+                <circle cx={x1} cy={y1} r="2.5" fill={color} pointerEvents="none" />
+                <circle cx={x2} cy={y2} r="3" fill={color} pointerEvents="none" />
+                <path d={`M ${x1} ${y1} L ${x2} ${y2}`} className="trade-connection-hit" />
+              </g>
+            );
+          })}
+        </svg>
+      )}
 
       {series && hostRef.current && (
         <svg
