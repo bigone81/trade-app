@@ -409,6 +409,34 @@ export default function TradingChart(p: Props) {
     [p.executions, p.symbol, preferences.tradingOverlays.accountIds],
   );
 
+  // The Lightweight Charts markers follow candle-time coordinates, while the
+  // chart's price autoscale can also change without a time-range event (e.g.
+  // a live bar sets a new high/low). Keep the SVG trade links in sync with the
+  // same price scale even when the horizontal viewport does not move.
+  useEffect(() => {
+    if (!chart || !series || !preferences.tradingOverlays.showExecutions
+      || !preferences.tradingOverlays.showTradeConnections || !tradeConnections.length) return;
+
+    const sample = tradeConnections.slice(0, 4);
+    let previousSignature: string | null = null;
+    const updateIfChanged = () => {
+      const signature = sample.flatMap((item) => [
+        series.priceToCoordinate(item.entryPrice),
+        series.priceToCoordinate(item.exitPrice),
+      ]).map((coordinate) => coordinate === null || !Number.isFinite(Number(coordinate))
+        ? 'none' : Number(coordinate).toFixed(1)).join('|');
+      if (signature !== previousSignature) {
+        previousSignature = signature;
+        setOverlayVersion((value) => value + 1);
+      }
+    };
+
+    const timer = window.setInterval(updateIfChanged, 250);
+    updateIfChanged();
+    return () => window.clearInterval(timer);
+  }, [chart, series, tradeConnections, preferences.tradingOverlays.showExecutions,
+    preferences.tradingOverlays.showTradeConnections]);
+
   const executionGroups = useMemo(
     () => buildExecutionGroups(
       p.executions,
@@ -1534,12 +1562,14 @@ export default function TradingChart(p: Props) {
           {tradeConnections.map((item) => {
             const entrySeconds = item.entryTime / 1000;
             const exitSeconds = item.exitTime / 1000;
-            if (executionCandleTime(timelineCandles, entrySeconds, p.timeframe) === null
-              || executionCandleTime(timelineCandles, exitSeconds, p.timeframe) === null) return null;
-            // Fractional logical coordinates preserve actual within-candle order;
-            // both fills can occur inside the same 1H candle.
-            const x1 = timeToCoordinate(entrySeconds);
-            const x2 = timeToCoordinate(exitSeconds);
+            // Use exactly the candle anchors used by execution markers. Passing
+            // an execution timestamp that has no candle to timeToCoordinate()
+            // can give an off-screen fallback even when both arrows are visible.
+            const entryCandle = executionCandleTime(timelineCandles, entrySeconds, p.timeframe);
+            const exitCandle = executionCandleTime(timelineCandles, exitSeconds, p.timeframe);
+            if (entryCandle === null || exitCandle === null) return null;
+            const x1 = chart.timeScale().timeToCoordinate(entryCandle as UTCTimestamp);
+            const x2 = chart.timeScale().timeToCoordinate(exitCandle as UTCTimestamp);
             const y1 = series.priceToCoordinate(item.entryPrice);
             const y2 = series.priceToCoordinate(item.exitPrice);
             if (x1 === null || x2 === null || y1 === null || y2 === null) return null;
