@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarSeries,
   ColorType,
   LineStyle,
   createChart,
-  createSeriesMarkers,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
@@ -17,11 +16,11 @@ import type {
   DrawingTool,
   ManualLevel,
   RiskReward,
-  TradeExecution,
+  RulerMeasurement,
   TradingOverlayLine,
 } from '@trade/shared';
 import RiskRewardOverlay from './RiskRewardOverlay';
-import { buildTradeConnections, type TradeConnection } from '../tradeConnections';
+import RulerOverlay from './RulerOverlay';
 import { readChartView, resolvedTheme, usePreferences, writeChartView } from '../preferences';
 import { useI18n } from '../i18n';
 
@@ -32,8 +31,8 @@ interface Props {
   manualLevels: ManualLevel[];
   alerts: AlertRecord[];
   riskRewards: RiskReward[];
+  measurements: RulerMeasurement[];
   tradingLines: TradingOverlayLine[];
-  executions: TradeExecution[];
   liveTradingEnabled: boolean;
   tool: DrawingTool;
   selectedRiskReward: RiskReward | null;
@@ -41,7 +40,6 @@ interface Props {
   tickSize: string | null;
   onCreateLevel: (price: number) => void;
   onCreateAlert: (price: number) => void;
-  onCreateLevelAlert: (price: number, sourceType: 'automatic_level' | 'manual_level', sourceId: number | null) => void;
   onCreateRiskReward: (r: Omit<RiskReward, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onSelectRiskReward: (r: RiskReward) => void;
   onUpdateRiskReward: (id: number, p: Partial<RiskReward>) => void;
@@ -50,10 +48,11 @@ interface Props {
   onDeleteLevel: (id: number) => void;
   onDeleteAlert: (id: number) => void;
   onDeleteRiskReward: (id: number) => void;
+  onCreateMeasurement: (input: Omit<RulerMeasurement, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  onDeleteMeasurement: (id: number) => void;
+  onMeasureDraftFinished: () => void;
   onRequestTradingLineChange: (line: TradingOverlayLine, price: number) => void;
-  onRequestCancelTradingOrders: (lines: TradingOverlayLine[]) => void;
   onUsePriceLevel: (price: number) => void;
-  onVisibleAutoLevelsChange?: (levels: AutoLevel[]) => void;
   onLivePrice?: (price: number) => void;
 }
 
@@ -71,7 +70,6 @@ type TradingDrag = { line: TradingOverlayLine; originalPrice: number; price: num
 type WsState = 'connecting' | 'live' | 'reconnecting' | 'offline';
 
 const DEFAULT_FUTURE_BARS = 24;
-const DEFAULT_BAR_SPACING = 6;
 
 const decimalsFromTickSize = (tickSize: string) => {
   const text = String(tickSize || '').trim().toLowerCase();
@@ -100,159 +98,6 @@ const chartPriceFormat = (tickSize: string | null, fallbackPrice = 0) => {
 const formatPriceByTick = (price: number, tickSize: string | null) => {
   const format = chartPriceFormat(tickSize, price);
   return Number(price).toFixed(format.precision);
-};
-
-type TradingLineGroup = {
-  key: string;
-  lines: TradingOverlayLine[];
-  representative: TradingOverlayLine;
-  price: number;
-  qty: number;
-  pnl: number;
-  accountCount: number;
-  linkKeys: string[];
-};
-
-type ExecutionGroup = {
-  key: string;
-  executions: TradeExecution[];
-  side: TradeExecution['side'];
-  time: number;
-  price: number;
-  qty: number;
-  fee: number;
-  accountCount: number;
-  fillCount: number;
-  orderCount: number;
-};
-
-type TradingLabelPlacement = {
-  group: TradingLineGroup;
-  lineY: number;
-  labelY: number;
-  text: string;
-  color: string;
-};
-
-const compactNumber = (value: number) => String(Number(value.toFixed(8)));
-const lineLinkKey = (line: TradingOverlayLine) => line.groupKey || line.id;
-const tradingLineColor = (kind: TradingOverlayLine['kind'], theme: 'light' | 'dark') =>
-  kind === 'order' ? '#4da3ff' : kind === 'trigger' ? '#e7a93b' : kind === 'position' ? (theme === 'light' ? '#263244' : '#e6edf7') : kind === 'sl' ? '#ef6675' : kind === 'tp' ? '#31c48d' : '#b783ff';
-
-const shortOrderType = (value?: string) => {
-  const type = String(value || '').toLowerCase();
-  if (type.includes('limit')) return 'LMT';
-  if (type.includes('market')) return 'MKT';
-  if (type.includes('stop')) return 'STOP';
-  return value ? String(value).slice(0, 6).toUpperCase() : 'ORD';
-};
-
-const buildTradingLineGroups = (
-  lines: TradingOverlayLine[],
-  mode: 'summary' | 'individual',
-  tickSize: string | null,
-): TradingLineGroup[] => {
-  if (mode === 'individual') {
-    return lines.map((line) => ({
-      key: line.id,
-      lines: [line],
-      representative: line,
-      price: line.price,
-      qty: Number(line.qty || 0),
-      pnl: Number(line.pnl || 0),
-      accountCount: 1,
-      linkKeys: [lineLinkKey(line)],
-    }));
-  }
-
-  const grouped = new Map<string, TradingOverlayLine[]>();
-  for (const line of lines) {
-    const key = [
-      line.kind,
-      line.side || '',
-      line.orderType || '',
-      line.editTarget || '',
-      formatPriceByTick(line.price, tickSize),
-    ].join('|');
-    const existing = grouped.get(key);
-    if (existing) existing.push(line);
-    else grouped.set(key, [line]);
-  }
-
-  return [...grouped.entries()].map(([key, groupLines]) => {
-    const representative = groupLines[0]!;
-    return {
-      key,
-      lines: groupLines,
-      representative,
-      price: representative.price,
-      qty: groupLines.reduce((sum, line) => sum + (Number.isFinite(Number(line.qty)) ? Number(line.qty) : 0), 0),
-      pnl: groupLines.reduce((sum, line) => sum + (Number.isFinite(Number(line.pnl)) ? Number(line.pnl) : 0), 0),
-      accountCount: new Set(groupLines.map((line) => line.accountId)).size,
-      linkKeys: [...new Set(groupLines.map(lineLinkKey))],
-    };
-  });
-};
-
-
-const executionCandleTime = (candles: Candle[], unixSeconds: number, timeframe: string) => {
-  if (!candles.length) return null;
-  if (unixSeconds < candles[0]!.time || unixSeconds > candles[candles.length - 1]!.time + timeframeSeconds(timeframe)) return null;
-  let lo = 0;
-  let hi = candles.length - 1;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (candles[mid]!.time <= unixSeconds) lo = mid;
-    else hi = mid - 1;
-  }
-  return candles[lo]!.time;
-};
-
-const mergeExecutionRows = (key: string, rows: TradeExecution[], time: number): ExecutionGroup => {
-  const qty = rows.reduce((sum, row) => sum + Number(row.execQty || 0), 0);
-  const weighted = rows.reduce((sum, row) => sum + Number(row.execPrice || 0) * Number(row.execQty || 0), 0);
-  return {
-    key,
-    executions: rows,
-    side: rows[0]!.side,
-    time,
-    price: qty > 0 ? weighted / qty : Number(rows[0]!.execPrice || 0),
-    qty,
-    fee: rows.reduce((sum, row) => sum + Number(row.execFee || 0), 0),
-    accountCount: new Set(rows.map((row) => row.accountId)).size,
-    fillCount: rows.length,
-    orderCount: new Set(rows.map((row) => `${row.accountId}:${row.orderId}`)).size,
-  };
-};
-
-const buildExecutionGroups = (
-  executions: TradeExecution[],
-  symbol: string,
-  timeframe: string,
-  candles: Candle[],
-  mode: 'summary' | 'individual',
-  accountIds: number[],
-): ExecutionGroup[] => {
-  if (!candles.length) return [];
-  const allowed = (accountId: number) => !accountIds.length || accountIds.includes(accountId);
-  const normalized = executions
-    .filter((execution) => execution.execType === 'Trade' && execution.symbol === symbol && allowed(execution.accountId))
-    .map((execution) => ({ execution, time: executionCandleTime(candles, Math.floor(execution.execTime / 1000), timeframe) }))
-    .filter((row): row is { execution: TradeExecution; time: number } => row.time !== null);
-
-  const grouped = new Map<string, { rows: TradeExecution[]; time: number }>();
-  for (const { execution, time } of normalized) {
-    const key = mode === 'summary'
-      ? `${execution.side}|${time}`
-      : `${execution.accountId}|${execution.orderId}|${execution.side}|${time}`;
-    const current = grouped.get(key);
-    if (current) current.rows.push(execution);
-    else grouped.set(key, { rows: [execution], time });
-  }
-
-  return [...grouped.entries()]
-    .map(([key, value]) => mergeExecutionRows(key, value.rows, value.time))
-    .sort((a, b) => a.time - b.time || a.price - b.price);
 };
 
 const formatCrosshairTime = (time: number, language: 'en' | 'uk' | 'ru', timeframe: string) => {
@@ -356,15 +201,12 @@ export default function TradingChart(p: Props) {
   const manualLineMap = useRef(new Map<number, IPriceLine>());
   const alertLineMap = useRef(new Map<number, IPriceLine>());
   const tradingLineMap = useRef(new Map<string, IPriceLine>());
-  const executionMarkersRef = useRef<any>(null);
   const toolRef = useRef(p.tool);
   const timeframeRef = useRef(p.timeframe);
   const onCreateLevelRef = useRef(p.onCreateLevel);
   const onCreateAlertRef = useRef(p.onCreateAlert);
   const onCreateRiskRewardRef = useRef(p.onCreateRiskReward);
   const onLivePriceRef = useRef(p.onLivePrice);
-  const onVisibleAutoLevelsChangeRef = useRef(p.onVisibleAutoLevelsChange);
-  const visibleAutoSignatureRef = useRef('');
   const [rrDraft, setRrDraft] = useState<RrDraft>({});
   const rrDraftRef = useRef<RrDraft>({});
   const [rrHover, setRrHover] = useState<RrHover>(null);
@@ -372,8 +214,6 @@ export default function TradingChart(p: Props) {
   const priceDragRef = useRef<PriceDrag | null>(null);
   const [tradingDrag, setTradingDrag] = useState<TradingDrag | null>(null);
   const tradingDragRef = useRef<TradingDrag | null>(null);
-  const [hoveredTradingGroupKey, setHoveredTradingGroupKey] = useState<string | null>(null);
-  const [hoveredLevelAlertKey, setHoveredLevelAlertKey] = useState<string | null>(null);
   const [overlayVersion, setOverlayVersion] = useState(0);
   const [wsState, setWsState] = useState<WsState>('connecting');
   const [isAtLiveEdge, setIsAtLiveEdge] = useState(true);
@@ -382,11 +222,6 @@ export default function TradingChart(p: Props) {
   const lastPriceReportAtRef = useRef(0);
   const restoringViewRef = useRef(false);
   const saveViewTimerRef = useRef<number | null>(null);
-  const viewSymbolRef = useRef(p.symbol);
-  const pendingSymbolLiveRef = useRef(false);
-  const appliedViewKeyRef = useRef<string | null>(null);
-  const appliedViewChartRef = useRef<IChartApi | null>(null);
-  const viewRestoreTimerRef = useRef<number | null>(null);
   const snapPricesRef = useRef<number[]>([]);
   const rrPreferencesRef = useRef(preferences.riskReward);
 
@@ -396,65 +231,12 @@ export default function TradingChart(p: Props) {
   onCreateAlertRef.current = p.onCreateAlert;
   onCreateRiskRewardRef.current = p.onCreateRiskReward;
   onLivePriceRef.current = p.onLivePrice;
-  onVisibleAutoLevelsChangeRef.current = p.onVisibleAutoLevelsChange;
   rrDraftRef.current = rrDraft;
   priceDragRef.current = priceDrag;
   tradingDragRef.current = tradingDrag;
   timelineCandlesRef.current = timelineCandles;
   snapPricesRef.current = [...p.autoLevels.map((level) => level.price), ...p.manualLevels.map((level) => level.price)];
   rrPreferencesRef.current = preferences.riskReward;
-
-  const tradeConnections = useMemo(
-    () => buildTradeConnections(p.executions, p.symbol, preferences.tradingOverlays.accountIds),
-    [p.executions, p.symbol, preferences.tradingOverlays.accountIds],
-  );
-
-  // The Lightweight Charts markers follow candle-time coordinates, while the
-  // chart's price autoscale can also change without a time-range event (e.g.
-  // a live bar sets a new high/low). Keep the SVG trade links in sync with the
-  // same price scale even when the horizontal viewport does not move.
-  useEffect(() => {
-    if (!chart || !series || !preferences.tradingOverlays.showExecutions
-      || !preferences.tradingOverlays.showTradeConnections || !tradeConnections.length) return;
-
-    const sample = tradeConnections.slice(0, 4);
-    let previousSignature: string | null = null;
-    const updateIfChanged = () => {
-      const signature = sample.flatMap((item) => [
-        series.priceToCoordinate(item.entryPrice),
-        series.priceToCoordinate(item.exitPrice),
-      ]).map((coordinate) => coordinate === null || !Number.isFinite(Number(coordinate))
-        ? 'none' : Number(coordinate).toFixed(1)).join('|');
-      if (signature !== previousSignature) {
-        previousSignature = signature;
-        setOverlayVersion((value) => value + 1);
-      }
-    };
-
-    const timer = window.setInterval(updateIfChanged, 250);
-    updateIfChanged();
-    return () => window.clearInterval(timer);
-  }, [chart, series, tradeConnections, preferences.tradingOverlays.showExecutions,
-    preferences.tradingOverlays.showTradeConnections]);
-
-  const executionGroups = useMemo(
-    () => buildExecutionGroups(
-      p.executions,
-      p.symbol,
-      p.timeframe,
-      timelineCandles,
-      preferences.tradingOverlays.accountDisplayMode,
-      preferences.tradingOverlays.accountIds,
-    ),
-    [
-      p.executions,
-      p.symbol,
-      p.timeframe,
-      timelineCandles,
-      preferences.tradingOverlays.accountDisplayMode,
-      preferences.tradingOverlays.accountIds,
-    ],
-  );
 
   useEffect(() => {
     const next = p.candles;
@@ -669,45 +451,6 @@ export default function TradingChart(p: Props) {
   }, [series, p.symbol, p.tickSize, p.candles]);
 
   useEffect(() => {
-    if (!series) return;
-    const plugin = createSeriesMarkers(series, [], { autoScale: false });
-    executionMarkersRef.current = plugin;
-    return () => {
-      if (executionMarkersRef.current === plugin) executionMarkersRef.current = null;
-      try { plugin.detach(); } catch { /* chart teardown can detach it first */ }
-    };
-  }, [series]);
-
-  useEffect(() => {
-    const plugin = executionMarkersRef.current;
-    if (!plugin) return;
-    const overlay = preferences.tradingOverlays;
-    if (!overlay.showExecutions || !executionGroups.length) {
-      plugin.setMarkers([]);
-      return;
-    }
-
-    const markers = executionGroups.map((group) => {
-      const buy = group.side === 'Buy';
-      const qty = overlay.showOrderSize && group.qty > 0 ? compactNumber(group.qty) : '';
-      const accounts = overlay.accountDisplayMode === 'summary' && group.accountCount > 1 ? ` · ×${group.accountCount}` : '';
-      const fills = !qty && !accounts && group.fillCount > 1 ? `×${group.fillCount}` : '';
-      return {
-        id: `execution-group-${group.key}`,
-        time: group.time as UTCTimestamp,
-        position: buy ? 'atPriceBottom' : 'atPriceTop',
-        price: group.price,
-        color: buy ? '#31c48d' : '#ef6675',
-        shape: buy ? 'arrowUp' : 'arrowDown',
-        text: `${qty}${accounts}${fills}`.trim(),
-        size: 0.55,
-      };
-    });
-
-    plugin.setMarkers(markers);
-  }, [series, executionGroups, preferences.tradingOverlays.showExecutions, preferences.tradingOverlays.showOrderSize, preferences.tradingOverlays.accountDisplayMode]);
-
-  useEffect(() => {
     if (!chart || !hostRef.current) return;
     const refresh = () => {
       setOverlayVersion((value) => value + 1);
@@ -737,75 +480,6 @@ export default function TradingChart(p: Props) {
       observer.disconnect();
     };
   }, [chart, p.symbol, p.timeframe]);
-
-  useEffect(() => {
-    if (!series || !hostRef.current) return;
-    const callback = onVisibleAutoLevelsChangeRef.current;
-    if (!callback) return;
-    const height = hostRef.current.clientHeight;
-    const visible = p.autoLevels.filter((level) => {
-      const y = series.priceToCoordinate(level.price);
-      if (y === null) return false;
-      const value = Number(y);
-      return Number.isFinite(value) && value >= 0 && value <= height;
-    });
-    const signature = `${p.symbol}|${visible.map((level) => `${level.type}:${level.price}`).join('|')}`;
-    if (signature === visibleAutoSignatureRef.current) return;
-    visibleAutoSignatureRef.current = signature;
-    callback(visible);
-  }, [series, p.autoLevels, overlayVersion, p.symbol, p.timeframe]);
-
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    let frame = 0;
-    const redraw = () => {
-      if (frame) return;
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        setOverlayVersion((value) => value + 1);
-      });
-    };
-    const pointerMove = (event: PointerEvent) => { if (event.buttons) redraw(); };
-    const doubleClick = (event: MouseEvent) => {
-      redraw();
-      if (!chart || !series) return;
-
-      const scaleApi = chart.priceScale('right') as any;
-      const measuredScaleWidth = Number(scaleApi.width?.() || 0);
-      const scaleWidth = Number.isFinite(measuredScaleWidth) && measuredScaleWidth > 0
-        ? measuredScaleWidth
-        : 64;
-      const bounds = host.getBoundingClientRect();
-      const x = event.clientX - bounds.left;
-      if (x < host.clientWidth - scaleWidth) return;
-
-      // Keep Lightweight Charts' native price-axis double-click behavior, then
-      // explicitly restore autoscale and return the time axis to the live edge.
-      window.requestAnimationFrame(() => {
-        series.priceScale().applyOptions({ autoScale: true });
-        chart.timeScale().applyOptions({
-          barSpacing: DEFAULT_BAR_SPACING,
-          rightOffset: futureBars,
-        });
-        chart.timeScale().scrollToRealTime();
-        followLiveRef.current = true;
-        setIsAtLiveEdge(true);
-        setOverlayVersion((value) => value + 1);
-      });
-    };
-    host.addEventListener('pointermove', pointerMove);
-    host.addEventListener('pointerup', redraw);
-    host.addEventListener('wheel', redraw, { passive: true });
-    host.addEventListener('dblclick', doubleClick);
-    return () => {
-      if (frame) window.cancelAnimationFrame(frame);
-      host.removeEventListener('pointermove', pointerMove);
-      host.removeEventListener('pointerup', redraw);
-      host.removeEventListener('wheel', redraw);
-      host.removeEventListener('dblclick', doubleClick);
-    };
-  }, [chart, series, futureBars]);
 
   useEffect(() => {
     if (!series) return;
@@ -1026,90 +700,59 @@ export default function TradingChart(p: Props) {
 
     const overlay = preferences.tradingOverlays;
     const accountAllowed = (accountId: number) => overlay.accountIds.length === 0 || overlay.accountIds.includes(accountId);
-    const kindVisible = (kind: TradingOverlayLine['kind']) => kind === 'order' || kind === 'trigger' ? overlay.showOrders : kind === 'position' ? overlay.showPositions : kind === 'sl' || kind === 'tp' ? overlay.showOrders : overlay.showLiquidation;
-    const styleFor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.orderStyle : kind === 'trigger' ? 'dashed' : kind === 'position' ? overlay.positionStyle : kind === 'sl' ? overlay.stopStyle : kind === 'tp' ? overlay.targetStyle : 'dotted';
-    const visibleLines = p.tradingLines.filter((line) => accountAllowed(line.accountId) && kindVisible(line.kind));
-    const groups = buildTradingLineGroups(visibleLines, overlay.accountDisplayMode, p.tickSize);
-    for (const group of groups) {
-      const tradingLine = group.representative;
-      const priceLine = series.createPriceLine({
-        price: group.price,
-        color: rgba(tradingLineColor(tradingLine.kind, theme), overlay.opacity),
+    const kindVisible = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.showOrders : kind === 'position' ? overlay.showPositions : kind === 'sl' ? overlay.showStopLoss : kind === 'tp' ? overlay.showTakeProfit : overlay.showLiquidation;
+    const lineColor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? '#4da3ff' : kind === 'position' ? (theme === 'light' ? '#263244' : '#e6edf7') : kind === 'sl' ? '#ef6675' : kind === 'tp' ? '#31c48d' : '#b783ff';
+    const styleFor = (kind: TradingOverlayLine['kind']) => kind === 'order' ? overlay.orderStyle : kind === 'position' ? overlay.positionStyle : kind === 'sl' ? overlay.stopStyle : kind === 'tp' ? overlay.targetStyle : 'dotted';
+    const titleFor = (line: TradingOverlayLine) => {
+      if (overlay.labelMode === 'price') return '';
+      const orderSide=line.side==='Buy'?(language==='uk'?'КУПІВЛЯ':language==='ru'?'ПОКУПКА':'BUY'):line.side==='Sell'?(language==='uk'?'ПРОДАЖ':language==='ru'?'ПРОДАЖА':'SELL'):'';
+      const kind = line.kind === 'order' ? `${orderSide} ${line.orderType || (language==='uk'?'ОРДЕР':language==='ru'?'ОРДЕР':'ORDER')}`.trim() : line.kind === 'position' ? (language==='uk'?'ПОЗИЦІЯ':language==='ru'?'ПОЗИЦИЯ':'POSITION') : line.kind.toUpperCase();
+      const account = overlay.showAccountName ? ` · ${line.accountName}` : '';
+      if (overlay.labelMode === 'compact') return `${kind}${account}`;
+      const side = line.kind !== 'order' && line.side ? ` · ${line.side === 'Buy' ? 'LONG' : 'SHORT'}` : '';
+      const size = overlay.showOrderSize && line.qty ? ` · ${line.qty}` : '';
+      const pnl = overlay.showPnl && line.kind === 'position' && typeof line.pnl === 'number' && Number.isFinite(line.pnl) ? ` · PnL ${line.pnl.toFixed(2)}` : '';
+      return `${kind}${side}${size}${account}${pnl}`;
+    };
+
+    for (const tradingLine of p.tradingLines.filter((line) => accountAllowed(line.accountId) && kindVisible(line.kind))) {
+      const line = series.createPriceLine({
+        price: tradingLine.price,
+        color: rgba(lineColor(tradingLine.kind), overlay.opacity),
         lineWidth: overlay.lineWidth,
         lineStyle: toLineStyle(styleFor(tradingLine.kind) as any),
         axisLabelVisible: true,
-        title: '',
+        title: titleFor(tradingLine),
       });
-      lines.current.push(priceLine);
-      for (const groupedLine of group.lines) tradingLineMap.current.set(groupedLine.id, priceLine);
+      lines.current.push(line);
+      tradingLineMap.current.set(tradingLine.id, line);
     }
   }, [series, p.autoLevels, p.manualLevels, p.alerts, p.tradingLines, theme, preferences.manualLevel, preferences.tradingOverlays, language, t]);
 
 
   useEffect(() => {
-    // Switching symbols always opens at the live edge. Do not restore the
-    // previous scroll position of a symbol when returning to it later.
-    if (viewSymbolRef.current !== p.symbol) {
-      viewSymbolRef.current = p.symbol;
-      pendingSymbolLiveRef.current = true;
-      restoringViewRef.current = true;
-      if (saveViewTimerRef.current !== null) {
-        window.clearTimeout(saveViewTimerRef.current);
-        saveViewTimerRef.current = null;
-      }
-    }
-
-    if (!chart || !p.candles.length) return; // Wait for the selected symbol's candles.
-    if (appliedViewChartRef.current !== chart) {
-      appliedViewChartRef.current = chart;
-      appliedViewKeyRef.current = null;
-    }
-    const viewKey = `${p.symbol}|${p.timeframe}`;
-    // Incoming bars/refetches must not undo a user's manual pan or zoom.
-    if (!pendingSymbolLiveRef.current && appliedViewKeyRef.current === viewKey) return;
-
+    if (!chart || !p.candles.length) return;
     restoringViewRef.current = true;
-    if (viewRestoreTimerRef.current !== null) window.clearTimeout(viewRestoreTimerRef.current);
-
-    if (pendingSymbolLiveRef.current) {
-      // Restore both default zoom and live position on every symbol selection.
-      series?.priceScale().applyOptions({ autoScale: true });
-      chart.timeScale().applyOptions({ barSpacing: DEFAULT_BAR_SPACING, rightOffset: futureBars });
+    const stored = readChartView(p.symbol, p.timeframe);
+    if (stored) {
+      const step = timeframeSeconds(p.timeframe);
+      const restoredRange = {
+        from: logicalAtTime(p.candles, stored.fromTime, step),
+        to: logicalAtTime(p.candles, stored.toTime, step),
+      };
+      (chart.timeScale() as any).setVisibleLogicalRange(restoredRange);
+      const atEdge = restoredRange.to >= p.candles.length - 1 - 0.5;
+      followLiveRef.current = atEdge;
+      setIsAtLiveEdge(atEdge);
+    } else {
+      chart.timeScale().fitContent();
+      chart.timeScale().applyOptions({ rightOffset: futureBars });
       chart.timeScale().scrollToRealTime();
       followLiveRef.current = true;
       setIsAtLiveEdge(true);
-      pendingSymbolLiveRef.current = false;
-    } else {
-      // Preserve the existing saved-view behavior when only timeframe changes.
-      const stored = readChartView(p.symbol, p.timeframe);
-      if (stored) {
-        const step = timeframeSeconds(p.timeframe);
-        const restoredRange = {
-          from: logicalAtTime(p.candles, stored.fromTime, step),
-          to: logicalAtTime(p.candles, stored.toTime, step),
-        };
-        chart.timeScale().setVisibleLogicalRange(restoredRange);
-        const atEdge = restoredRange.to >= p.candles.length - 1 - 0.5;
-        followLiveRef.current = atEdge;
-        setIsAtLiveEdge(atEdge);
-      } else {
-        chart.timeScale().fitContent();
-        chart.timeScale().applyOptions({ rightOffset: futureBars });
-        chart.timeScale().scrollToRealTime();
-        followLiveRef.current = true;
-        setIsAtLiveEdge(true);
-      }
     }
-    appliedViewKeyRef.current = viewKey;
-    viewRestoreTimerRef.current = window.setTimeout(() => {
-      restoringViewRef.current = false;
-      viewRestoreTimerRef.current = null;
-    }, 100);
-  }, [chart, series, p.symbol, p.timeframe, p.candles.length, futureBars]);
-
-  useEffect(() => () => {
-    if (viewRestoreTimerRef.current !== null) window.clearTimeout(viewRestoreTimerRef.current);
-  }, []);
+    window.setTimeout(() => { restoringViewRef.current = false; }, 100);
+  }, [chart, p.symbol, p.timeframe, p.candles.length]);
 
   useEffect(() => {
     if (p.tool !== 'risk-reward') {
@@ -1234,20 +877,10 @@ export default function TradingChart(p: Props) {
 
   const canDragTradingLine = (line: TradingOverlayLine) => {
     if (!p.liveTradingEnabled || !line.editTarget) return false;
-    if (line.kind === 'order' || line.kind === 'trigger') return preferences.tradingOverlays.allowDragOrders;
+    if (line.kind === 'order') return preferences.tradingOverlays.allowDragOrders;
     if (line.kind === 'sl') return preferences.tradingOverlays.allowDragStops;
     if (line.kind === 'tp') return preferences.tradingOverlays.allowDragTargets;
     return false;
-  };
-
-  const canCancelTradingGroup = (group: TradingLineGroup) => {
-    if (!p.liveTradingEnabled || group.lines.some((item) => !item.orderId)) return false;
-    const line = group.representative;
-    if (line.kind === 'order') return true;
-    if (line.kind !== 'trigger') return false;
-    // Stop Market has no separate entry-price line, so its trigger is the
-    // cancellation anchor. Stop Limit is cancelled from its ENTRY line.
-    return String(line.orderType || '').toLowerCase().includes('market');
   };
 
   const startTradingDrag = (line: TradingOverlayLine, event: any) => {
@@ -1260,173 +893,15 @@ export default function TradingChart(p: Props) {
     setTradingDrag(next);
   };
 
-  const visibleTradingLines = useMemo(() => p.tradingLines.filter((line) => {
+  const visibleTradingLines = p.tradingLines.filter((line) => {
     const overlay = preferences.tradingOverlays;
     if (overlay.accountIds.length && !overlay.accountIds.includes(line.accountId)) return false;
-    if (line.kind === 'order' || line.kind === 'trigger') return overlay.showOrders;
+    if (line.kind === 'order') return overlay.showOrders;
     if (line.kind === 'position') return overlay.showPositions;
-    if (line.kind === 'sl' || line.kind === 'tp') return overlay.showOrders;
+    if (line.kind === 'sl') return overlay.showStopLoss;
+    if (line.kind === 'tp') return overlay.showTakeProfit;
     return overlay.showLiquidation;
-  }), [p.tradingLines, preferences.tradingOverlays]);
-
-  const visibleTradingGroups = useMemo(() => buildTradingLineGroups(
-    visibleTradingLines,
-    preferences.tradingOverlays.accountDisplayMode,
-    p.tickSize,
-  ), [visibleTradingLines, preferences.tradingOverlays.accountDisplayMode, p.tickSize]);
-
-  const hoveredTradingLinks = useMemo(() => {
-    const group = visibleTradingGroups.find((item) => item.key === hoveredTradingGroupKey);
-    return new Set(group?.linkKeys || []);
-  }, [visibleTradingGroups, hoveredTradingGroupKey]);
-
-  const levelAlertTolerance = (price: number) => {
-    const tick = Number(p.tickSize || 0);
-    return Number.isFinite(tick) && tick > 0
-      ? tick / 2
-      : Math.max(1e-10, Math.abs(price) * 1e-8);
-  };
-
-  const activeAlertAtLevel = (price: number) =>
-    p.alerts.find((alert) =>
-      alert.active && Math.abs(alert.price - price) <= levelAlertTolerance(price),
-    ) || null;
-
-  const renderLevelAlertBell = (
-    key: string,
-    price: number,
-    y: number,
-    sourceType: 'automatic_level' | 'manual_level',
-    sourceId: number | null,
-    x: number,
-  ) => {
-    const existing = activeAlertAtLevel(price);
-    const visible = hoveredLevelAlertKey === key || Boolean(existing);
-    if (!visible) return null;
-    const title = existing
-      ? `${t('Alert already exists at this level')} · ${formatPriceByTick(price, p.tickSize)}`
-      : `${t('Create alert at level')} · ${formatPriceByTick(price, p.tickSize)}`;
-    return (
-      <g
-        className={`level-alert-bell${existing ? ' active' : ''}`}
-        onPointerDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (!existing) p.onCreateLevelAlert(price, sourceType, sourceId);
-        }}
-      >
-        <title>{title}</title>
-        <circle cx={x} cy={y} r="10" />
-        <path
-          d="M18 8a6 6 0 0 0-12 0c0 4.499-1.411 5.956-2.738 7.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .738-1.674C19.411 13.956 18 12.499 18 8"
-          transform={`translate(${x - 6} ${y - 6}) scale(.5)`}
-        />
-        <path
-          d="M10.268 21a2 2 0 0 0 3.464 0"
-          transform={`translate(${x - 6} ${y - 6}) scale(.5)`}
-        />
-      </g>
-    );
-  };
-
-
-  useEffect(() => {
-    const overlay = preferences.tradingOverlays;
-    const highlightedWidth = Math.min(3, overlay.lineWidth + 1) as 1 | 2 | 3;
-    for (const group of visibleTradingGroups) {
-      const priceLine = tradingLineMap.current.get(group.representative.id);
-      if (!priceLine) continue;
-      const linked = hoveredTradingLinks.size > 0 && group.linkKeys.some((key) => hoveredTradingLinks.has(key));
-      priceLine.applyOptions({
-        color: rgba(tradingLineColor(group.representative.kind, theme), linked ? 1 : overlay.opacity),
-        lineWidth: linked ? highlightedWidth : overlay.lineWidth,
-      });
-    }
-  }, [visibleTradingGroups, hoveredTradingLinks, preferences.tradingOverlays.lineWidth, preferences.tradingOverlays.opacity, theme]);
-
-  const sideTitle = (side?: TradeExecution['side']) => side === 'Buy'
-    ? (language === 'uk' ? 'КУПІВЛЯ' : language === 'ru' ? 'ПОКУПКА' : 'BUY')
-    : (language === 'uk' ? 'ПРОДАЖ' : language === 'ru' ? 'ПРОДАЖА' : 'SELL');
-
-  const tradingGroupLabel = (group: TradingLineGroup) => {
-    const overlay = preferences.tradingOverlays;
-    if (overlay.labelMode === 'price') return '';
-    const line = group.representative;
-    let head = '';
-    if (line.kind === 'order') head = `${sideTitle(line.side)} ${shortOrderType(line.orderType)}`;
-    else if (line.kind === 'trigger') head = t('Trigger').toUpperCase();
-    else if (line.kind === 'position') head = line.side === 'Buy' ? 'LONG' : 'SHORT';
-    else if (line.kind === 'liq') head = 'LIQ';
-    else head = line.kind.toUpperCase();
-
-    const parts = [head];
-    if (overlay.labelMode === 'full' && overlay.showOrderSize && group.qty > 0) parts.push(compactNumber(group.qty));
-    if (overlay.accountDisplayMode === 'summary' && group.accountCount > 1) parts.push(`×${group.accountCount}`);
-    if (overlay.accountDisplayMode === 'individual' && overlay.showAccountName) parts.push(line.accountName);
-    if (overlay.labelMode === 'full' && overlay.showPnl && line.kind === 'position' && Number.isFinite(group.pnl)) {
-      parts.push(`${group.pnl >= 0 ? '+' : ''}${group.pnl.toFixed(2)}`);
-    }
-    return parts.join(' · ');
-  };
-
-  const tradingGroupTooltip = (group: TradingLineGroup) => {
-    const accountHeader = language === 'uk' ? 'Акаунти' : language === 'ru' ? 'Аккаунты' : 'Accounts';
-    const line = group.representative;
-    const title = line.kind === 'order'
-      ? `${sideTitle(line.side)} ${shortOrderType(line.orderType)}`
-      : line.kind === 'trigger'
-        ? t('Trigger').toUpperCase()
-        : line.kind === 'position'
-        ? (line.side === 'Buy' ? 'LONG' : 'SHORT')
-        : line.kind.toUpperCase();
-    return [
-      `${title} @ ${formatPriceByTick(group.price, p.tickSize)}`,
-      `${accountHeader}:`,
-      ...group.lines.map((item) => `${item.accountName}${item.qty ? ` · ${compactNumber(Number(item.qty))}` : ''}`),
-    ].join('\n');
-  };
-
-  const executionTooltip = (group: ExecutionGroup) => {
-    const locale = language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US';
-    const accountRows = new Map<string, { qty: number; fee: number; fills: number }>();
-    for (const execution of group.executions) {
-      const current = accountRows.get(execution.accountName) || { qty: 0, fee: 0, fills: 0 };
-      current.qty += Number(execution.execQty || 0);
-      current.fee += Number(execution.execFee || 0);
-      current.fills += 1;
-      accountRows.set(execution.accountName, current);
-    }
-    const execTime = Math.min(...group.executions.map((execution) => execution.execTime));
-    const time = new Intl.DateTimeFormat(locale, {
-      day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-    }).format(new Date(execTime));
-    return [
-      `${sideTitle(group.side)} · ${group.accountCount > 1 ? `×${group.accountCount}` : group.executions[0]?.accountName || ''}`,
-      `${t('Price')}: ${formatPriceByTick(group.price, p.tickSize)}`,
-      `${t('Qty')}: ${compactNumber(group.qty)}`,
-      `${t('Fee')}: ${compactNumber(group.fee)}`,
-      `${t('Executions')}: ${group.fillCount}`,
-      `${t('Time')}: ${time}`,
-      '',
-      ...[...accountRows.entries()].map(([name, row]) => `${name} · ${compactNumber(row.qty)}${row.fills > 1 ? ` · ×${row.fills}` : ''}`),
-    ].join('\n');
-  };
-
-
-  const tradeConnectionTooltip = (item: TradeConnection) => {
-    const priceChange = (item.exitPrice - item.entryPrice) / item.entryPrice * 100;
-    const directionChange = item.direction === 'long' ? priceChange : -priceChange;
-    const locale = language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US';
-    const date = (ms: number) => new Intl.DateTimeFormat(locale, {
-      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-    }).format(new Date(ms));
-    return [
-      `${item.accountName} · ${item.direction.toUpperCase()} · ${compactNumber(item.qty)}`,
-      `${date(item.entryTime)} · ${formatPriceByTick(item.entryPrice, p.tickSize)}`,
-      `→ ${date(item.exitTime)} · ${formatPriceByTick(item.exitPrice, p.tickSize)}`,
-      `${directionChange >= 0 ? '+' : ''}${directionChange.toFixed(2)}% (${language === 'uk' ? 'рух ціни, не PnL' : language === 'ru' ? 'изменение цены, не PnL' : 'price movement, not PnL'})`,
-    ].join('\n');
-  };
+  });
 
   const timeToCoordinate = (time: number) => {
     if (!chart) return null;
@@ -1439,61 +914,6 @@ export default function TradingChart(p: Props) {
     );
     return (chart.timeScale() as any).logicalToCoordinate(logical) as number | null;
   };
-
-  const priceScaleWidth = chart ? Number((chart.priceScale('right') as any).width?.() || 64) : 64;
-
-  const tradingLabelPlacements: TradingLabelPlacement[] = (() => {
-    if (!series || !hostRef.current || preferences.tradingOverlays.labelMode === 'price') return [];
-    const height = hostRef.current.clientHeight;
-    if (!height) return [];
-    const occupied: number[] = [];
-    const reservePrice = (price: number) => {
-      const y = series.priceToCoordinate(price);
-      if (y !== null && y >= 0 && y <= height) occupied.push(y);
-    };
-    p.autoLevels.forEach((level) => reservePrice(level.price));
-    p.manualLevels.forEach((level) => reservePrice(level.price));
-    p.alerts.filter((alert) => alert.active).forEach((alert) => reservePrice(alert.price));
-
-    const minY = 13;
-    const maxY = Math.max(minY, height - 13);
-    const minGap = 22;
-    const clampY = (value: number) => Math.max(minY, Math.min(maxY, value));
-    const isFree = (candidate: number) => occupied.every((taken) => Math.abs(candidate - taken) >= minGap);
-
-    const candidates: Array<{ group: TradingLineGroup; lineY: number; text: string; color: string }> = [];
-    for (const group of visibleTradingGroups) {
-      const line = group.representative;
-      const shownPrice = group.lines.length === 1 && tradingDrag?.line.id === line.id ? tradingDrag.price : group.price;
-      const coordinate = series.priceToCoordinate(shownPrice);
-      const text = tradingGroupLabel(group);
-      if (coordinate === null || !text) continue;
-      const lineY = Number(coordinate);
-      if (lineY < -20 || lineY > height + 20) continue;
-      candidates.push({ group, lineY, text, color: tradingLineColor(line.kind, theme) });
-    }
-    candidates.sort((a, b) => a.lineY - b.lineY);
-
-    const placements: TradingLabelPlacement[] = [];
-    for (const candidate of candidates) {
-      const nearest = occupied.length
-        ? occupied.reduce((best, y) => Math.abs(y - candidate.lineY) < Math.abs(best - candidate.lineY) ? y : best, occupied[0]!)
-        : null;
-      const away = nearest === null ? 1 : (candidate.lineY >= nearest ? 1 : -1);
-      const offsets = [0];
-      for (let step = 1; step <= 10; step += 1) {
-        offsets.push(away * step * minGap, -away * step * minGap);
-      }
-      let labelY = clampY(candidate.lineY);
-      for (const offset of offsets) {
-        const attempt = clampY(candidate.lineY + offset);
-        if (isFree(attempt)) { labelY = attempt; break; }
-      }
-      occupied.push(labelY);
-      placements.push({ ...candidate, labelY });
-    }
-    return placements;
-  })();
 
   const entryY = series && rrDraft.entry !== undefined ? series.priceToCoordinate(rrDraft.entry) : null;
   const previewStop = rrDraft.entry !== undefined && rrHover ? rrHover.price : null;
@@ -1543,7 +963,6 @@ export default function TradingChart(p: Props) {
         series={series}
         host={hostRef.current}
         candles={timelineCandles}
-        timeframe={p.timeframe}
         items={p.riskRewards}
         selectedId={p.selectedRiskReward?.id ?? null}
         onSelect={p.onSelectRiskReward}
@@ -1551,46 +970,20 @@ export default function TradingChart(p: Props) {
         onDelete={p.onDeleteRiskReward}
       />
 
-      {chart && series && hostRef.current && preferences.tradingOverlays.showExecutions && preferences.tradingOverlays.showTradeConnections && tradeConnections.length > 0 && (
-        <svg
-          className="chart-overlay trade-connections-overlay"
-          width={hostRef.current.clientWidth}
-          height={hostRef.current.clientHeight}
-          data-version={overlayVersion}
-          aria-label={language === 'uk' ? 'Зв’язки входів і виходів Bybit' : language === 'ru' ? 'Связи входов и выходов Bybit' : 'Bybit entry-to-exit connections'}
-        >
-          {tradeConnections.map((item) => {
-            const entrySeconds = item.entryTime / 1000;
-            const exitSeconds = item.exitTime / 1000;
-            // Use exactly the candle anchors used by execution markers. Passing
-            // an execution timestamp that has no candle to timeToCoordinate()
-            // can give an off-screen fallback even when both arrows are visible.
-            const entryCandle = executionCandleTime(timelineCandles, entrySeconds, p.timeframe);
-            const exitCandle = executionCandleTime(timelineCandles, exitSeconds, p.timeframe);
-            if (entryCandle === null || exitCandle === null) return null;
-            const x1 = chart.timeScale().timeToCoordinate(entryCandle as UTCTimestamp);
-            const x2 = chart.timeScale().timeToCoordinate(exitCandle as UTCTimestamp);
-            const y1 = series.priceToCoordinate(item.entryPrice);
-            const y2 = series.priceToCoordinate(item.exitPrice);
-            if (x1 === null || x2 === null || y1 === null || y2 === null) return null;
-            const width = hostRef.current!.clientWidth - priceScaleWidth;
-            if (Math.max(x1, x2) < 0 || Math.min(x1, x2) > width) return null;
-            const height = hostRef.current!.clientHeight;
-            if (Math.max(y1, y2) < 0 || Math.min(y1, y2) > height) return null;
-            const movement = (item.exitPrice - item.entryPrice) * (item.direction === 'long' ? 1 : -1);
-            const color = movement >= 0 ? '#16b981' : '#f16d7e';
-            return (
-              <g className="trade-connection" key={item.id}>
-                <title>{tradeConnectionTooltip(item)}</title>
-                <path d={`M ${x1} ${y1} L ${x2} ${y2}`} stroke={color} className="trade-connection-path" />
-                <circle cx={x1} cy={y1} r="2.5" fill={color} pointerEvents="none" />
-                <circle cx={x2} cy={y2} r="3" fill={color} pointerEvents="none" />
-                <path d={`M ${x1} ${y1} L ${x2} ${y2}`} className="trade-connection-hit" />
-              </g>
-            );
-          })}
-        </svg>
-      )}
+      <RulerOverlay
+        chart={chart}
+        series={series}
+        host={hostRef.current}
+        candles={timelineCandles}
+        items={p.measurements}
+        tool={p.tool}
+        symbol={p.symbol}
+        timeframe={p.timeframe}
+        tickSize={p.tickSize}
+        onCreate={p.onCreateMeasurement}
+        onDelete={p.onDeleteMeasurement}
+        onFinishDraft={p.onMeasureDraftFinished}
+      />
 
       {series && hostRef.current && (
         <svg
@@ -1602,42 +995,25 @@ export default function TradingChart(p: Props) {
           {p.autoLevels.map((level, index) => {
             const y = series.priceToCoordinate(level.price);
             if (y === null) return null;
-            const key = `auto:${level.type}:${level.price}:${index}`;
-            const width = hostRef.current!.clientWidth;
-            const bellX = Math.max(20, width - 128);
             return (
-              <g
+              <rect
                 key={`auto-hit-${index}`}
-                onPointerEnter={() => setHoveredLevelAlertKey(key)}
-                onPointerLeave={() => setHoveredLevelAlertKey((current) => current === key ? null : current)}
-              >
-                <rect
-                  x="0"
-                  y={y - 5}
-                  width={width}
-                  height="10"
-                  fill="transparent"
-                  className={
-                    p.tool === 'select'
-                      ? 'price-line-click-target active'
-                      : 'price-line-click-target'
-                  }
-                  onPointerDown={(event) => {
-                    if (p.tool !== 'select') return;
-                    event.stopPropagation();
-                    p.onUsePriceLevel(level.price);
-                  }}
-                />
-                <rect
-                  x={Math.max(0, width - 214)}
-                  y={y - 10}
-                  width="98"
-                  height="20"
-                  fill="transparent"
-                  className="level-alert-hover-target"
-                />
-                {renderLevelAlertBell(key, level.price, y, 'automatic_level', null, bellX)}
-              </g>
+                x="0"
+                y={y - 5}
+                width={hostRef.current!.clientWidth}
+                height="10"
+                fill="transparent"
+                className={
+                  p.tool === 'select'
+                    ? 'price-line-click-target active'
+                    : 'price-line-click-target'
+                }
+                onPointerDown={(event) => {
+                  if (p.tool !== 'select') return;
+                  event.stopPropagation();
+                  p.onUsePriceLevel(level.price);
+                }}
+              />
             );
           })}
 
@@ -1649,14 +1025,8 @@ export default function TradingChart(p: Props) {
             const y = series.priceToCoordinate(shownPrice);
             if (y === null) return null;
             const x = Math.max(20, hostRef.current!.clientWidth - 82);
-            const key = `manual:${level.id}`;
-            const bellX = Math.max(20, hostRef.current!.clientWidth - 128);
             return (
-              <g
-                key={`manual-hit-${level.id}`}
-                onPointerEnter={() => setHoveredLevelAlertKey(key)}
-                onPointerLeave={() => setHoveredLevelAlertKey((current) => current === key ? null : current)}
-              >
+              <g key={`manual-hit-${level.id}`}>
                 <rect
                   x="0"
                   y={y - 7}
@@ -1680,7 +1050,6 @@ export default function TradingChart(p: Props) {
                     ×
                   </text>
                 </g>
-                {renderLevelAlertBell(key, shownPrice, y, 'manual_level', level.id, bellX)}
               </g>
             );
           })}
@@ -1724,127 +1093,25 @@ export default function TradingChart(p: Props) {
               );
             })}
 
-          {visibleTradingGroups.map((group) => {
-            const line = group.representative;
-            const isSingle = group.lines.length === 1;
-            const shownPrice = isSingle && tradingDrag?.line.id === line.id ? tradingDrag.price : group.price;
+          {visibleTradingLines.map((line) => {
+            const shownPrice = tradingDrag?.line.id === line.id ? tradingDrag.price : line.price;
             const y = series.priceToCoordinate(shownPrice);
             if (y === null) return null;
-            const draggable = isSingle && canDragTradingLine(line);
+            const draggable = canDragTradingLine(line);
             return (
-              <g key={`trading-hit-${group.key}`}>
-                {group.lines.length > 1 && <title>{tradingGroupTooltip(group)}</title>}
-                <rect
-                  x="0"
-                  y={y - 8}
-                  width={hostRef.current!.clientWidth}
-                  height="16"
-                  fill="transparent"
-                  className={draggable ? 'trading-line-hit draggable' : 'trading-line-hit'}
-                  onPointerEnter={() => { if (draggable) setHoveredTradingGroupKey(group.key); }}
-                  onPointerLeave={() => { if (draggable) setHoveredTradingGroupKey((current) => current === group.key ? null : current); }}
-                  onPointerDown={(event) => { if (draggable) startTradingDrag(line, event); }}
-                />
-              </g>
-            );
-          })}
-        </svg>
-      )}
-
-      {series && hostRef.current && tradingLabelPlacements.length > 0 && (
-        <>
-          <svg
-            className="chart-overlay trading-label-connectors"
-            width={hostRef.current.clientWidth}
-            height={hostRef.current.clientHeight}
-            data-version={overlayVersion}
-          >
-            {tradingLabelPlacements.map((placement) => {
-              if (Math.abs(placement.labelY - placement.lineY) < 2) return null;
-              const x = Math.max(12, hostRef.current!.clientWidth - priceScaleWidth - 8);
-              return (
-                <polyline
-                  key={`trade-connector-${placement.group.key}`}
-                  points={`${x + 8},${placement.lineY} ${x},${placement.lineY} ${x},${placement.labelY}`}
-                  fill="none"
-                  stroke={placement.color}
-                  strokeWidth="1"
-                  opacity="0.8"
-                />
-              );
-            })}
-          </svg>
-          <div className="trading-edge-label-layer" data-version={overlayVersion}>
-            {tradingLabelPlacements.map((placement) => {
-              const group = placement.group;
-              const line = group.representative;
-              const draggable = group.lines.length === 1 && canDragTradingLine(line);
-              const cancelable = canCancelTradingGroup(group);
-              const linked = hoveredTradingLinks.size > 0 && group.linkKeys.some((key) => hoveredTradingLinks.has(key));
-              const muted = hoveredTradingLinks.size > 0 && !linked;
-              const tooltipUp = placement.labelY > hostRef.current!.clientHeight * 0.62;
-              const style = {
-                top: placement.labelY,
-                right: priceScaleWidth + 8,
-                backgroundColor: rgba(placement.color, 0.96),
-                borderColor: placement.color,
-              } as CSSProperties;
-              return (
-                <div
-                  key={`trade-label-${group.key}`}
-                  className={`trading-edge-label kind-${line.kind}${draggable ? ' draggable' : ''}${cancelable ? ' has-cancel' : ''}${linked ? ' linked' : ''}${muted ? ' muted-link' : ''}${tooltipUp ? ' tooltip-up' : ''}`}
-                  style={style}
-                  data-tooltip={tradingGroupTooltip(group)}
-                  onMouseEnter={() => setHoveredTradingGroupKey(group.key)}
-                  onMouseLeave={() => setHoveredTradingGroupKey((current) => current === group.key ? null : current)}
-                  onPointerDown={(event) => { if (draggable) startTradingDrag(line, event); }}
-                >
-                  <span className="trading-edge-label-text">{placement.text}</span>
-                  {cancelable && (
-                    <button
-                      type="button"
-                      className="trading-order-cancel"
-                      title={t('Cancel')}
-                      aria-label={t('Cancel')}
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                        event.preventDefault();
-                      }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        p.onRequestCancelTradingOrders(group.lines);
-                      }}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </>
-      )}
-
-      {series && hostRef.current && preferences.tradingOverlays.showExecutions && executionGroups.length > 0 && (
-        <div className="execution-hover-layer" data-version={overlayVersion}>
-          {executionGroups.map((group) => {
-            const x = timeToCoordinate(group.time);
-            const priceY = series.priceToCoordinate(group.price);
-            if (x === null || priceY === null || x < -20 || x > hostRef.current!.clientWidth + 20) return null;
-            const y = priceY + (group.side === 'Buy' ? 9 : -9);
-            const tooltipUp = y > hostRef.current!.clientHeight * 0.62;
-            const tooltipLeft = x > hostRef.current!.clientWidth * 0.68;
-            return (
-              <div
-                key={`execution-hit-${group.key}`}
-                className={`execution-hover-target${group.side === 'Buy' ? ' buy' : ' sell'}${tooltipUp ? ' tooltip-up' : ''}${tooltipLeft ? ' tooltip-left' : ''}`}
-                style={{ left: x, top: y }}
-                data-tooltip={executionTooltip(group)}
-                aria-label={executionTooltip(group)}
+              <rect
+                key={`trading-hit-${line.id}`}
+                x="0"
+                y={y - 8}
+                width={hostRef.current!.clientWidth}
+                height="16"
+                fill="transparent"
+                className={draggable ? 'trading-line-hit draggable' : 'trading-line-hit'}
+                onPointerDown={(event) => startTradingDrag(line, event)}
               />
             );
           })}
-        </div>
+        </svg>
       )}
 
       {p.tool === 'risk-reward' && (

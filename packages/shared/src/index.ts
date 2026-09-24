@@ -9,7 +9,7 @@ export type Direction = 'long' | 'short';
 export type OrderKind = 'Market' | 'Limit';
 export type CalculatorMode = 'stop' | 'limit' | 'market';
 export type StopMode = 'atr' | 'technical';
-export type DrawingTool = 'select' | 'level' | 'risk-reward' | 'alert';
+export type DrawingTool = 'select' | 'level' | 'risk-reward' | 'alert' | 'measure';
 
 export interface AccountPublic {
   id: AccountId;
@@ -41,6 +41,18 @@ export interface RiskReward {
   target: number;
   startTime: number;
   endTime: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RulerMeasurement {
+  id: number;
+  symbol: string;
+  startTime: number;
+  endTime: number;
+  startPrice: number;
+  endPrice: number;
+  displayMode: 'line' | 'box';
   createdAt: string;
   updatedAt: string;
 }
@@ -164,18 +176,11 @@ export interface TradeExecution {
   execQty: number;
   execFee: number;
   execTime: number;
-  /** Actual quantity closing an existing position (Bybit V5 execution.closedSize). */
-  closedSize?: number;
-  /** Bybit V5 execution classification; chart and journal use Trade only. */
-  execType: string;
 }
-
-/** Funding, settlement and other account events are not order fills. */
-export const isRealTradeExecution = (execType: unknown): boolean => execType === 'Trade';
 
 export interface TradingOverlayLine {
   id: string;
-  kind: 'order' | 'trigger' | 'position' | 'sl' | 'tp' | 'liq';
+  kind: 'order' | 'position' | 'sl' | 'tp' | 'liq';
   price: number;
   accountId: number;
   accountName: string;
@@ -187,6 +192,5 @@ export interface TradingOverlayLine {
   orderType?: string;
   orderStatus?: string;
   positionIdx?: number;
-  groupKey?: string;
   editTarget?: 'order_price' | 'order_trigger' | 'order_sl' | 'order_tp' | 'position_sl' | 'position_tp';
 }

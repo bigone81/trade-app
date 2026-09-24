@@ -1,13 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bell,
   Calculator,
-  Clock3,
   MousePointer2,
-  Pin,
   Plus,
   Ratio,
+  Ruler,
 } from 'lucide-react';
 import type {
   AccountPublic,
@@ -16,7 +15,7 @@ import type {
   Candle,
   ManualLevel,
   RiskReward,
-  TradeExecution,
+  RulerMeasurement,
   TradeOrder,
   TradePosition,
   TradingOverlayLine,
@@ -26,7 +25,7 @@ import { useUi } from '../store';
 import TradingChart from '../components/TradingChart';
 import CalculatorDrawer from '../components/CalculatorDrawer';
 import ConfirmDialog from '../components/ConfirmDialog';
-import { buildTradingOverlayLines, groupActiveOrders } from '../tradeGrouping';
+import { buildTradingOverlayLines } from '../tradeGrouping';
 import { usePreferences } from '../preferences';
 import { useI18n } from '../i18n';
 
@@ -35,8 +34,6 @@ interface MarketTicker {
   lastPrice: number;
   price24hPcnt: number;
   turnover24h: number;
-  fundingRate: number | null;
-  nextFundingTime: number | null;
 }
 
 interface InstrumentRules {
@@ -44,20 +41,6 @@ interface InstrumentRules {
   tickSize: string;
   qtyStep: string;
 }
-
-const formatFundingCountdown = (milliseconds: number) => {
-  const remaining = Math.max(0, Math.floor(milliseconds / 1000));
-  const hours = Math.floor(remaining / 3600);
-  const minutes = Math.floor((remaining % 3600) / 60);
-  const seconds = remaining % 60;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-};
-
-const formatFundingPayment = (amount: number) => {
-  const absolute = Math.abs(amount);
-  const digits = absolute > 0 && absolute < 0.01 ? 4 : 2;
-  return `${amount > 0 ? '+' : amount < 0 ? '−' : ''}$${num(absolute, digits)}`;
-};
 
 const formatTurnover = (value: number) => {
   if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
@@ -69,15 +52,11 @@ const formatTurnover = (value: number) => {
 export default function ChartPage() {
   const qc = useQueryClient();
   const ui = useUi();
-  const { preferences, save: savePreferences } = usePreferences();
-  const { t, language } = useI18n();
+  const { preferences } = usePreferences();
+  const { t } = useI18n();
   const [tickerSearch, setTickerSearch] = useState('');
   const [livePrice, setLivePrice] = useState<number | null>(null);
-  const [fundingClock, setFundingClock] = useState(() => Date.now());
-  const [viewportAutoLevels, setViewportAutoLevels] = useState<AutoLevel[]>([]);
-  const [freezeFeedback, setFreezeFeedback] = useState<string | null>(null);
   const [pendingTradingChange, setPendingTradingChange] = useState<{ line: TradingOverlayLine; price: number } | null>(null);
-  const [pendingTradingCancel, setPendingTradingCancel] = useState<TradingOverlayLine[] | null>(null);
 
   const config = useQuery<{
     accounts: AccountPublic[];
@@ -93,11 +72,6 @@ export default function ChartPage() {
     staleTime: 8_000,
     refetchInterval: 10_000,
   });
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setFundingClock(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   const instrument = useQuery<InstrumentRules>({
     queryKey: ['instrument-rules', ui.symbol],
@@ -136,6 +110,11 @@ export default function ChartPage() {
     queryFn: () => api(`/api/drawings/risk-rewards?symbol=${ui.symbol}`),
   });
 
+  const measurements = useQuery<RulerMeasurement[]>({
+    queryKey: ['measurements', ui.symbol],
+    queryFn: () => api(`/api/drawings/measurements?symbol=${ui.symbol}`),
+  });
+
   const alerts = useQuery<AlertRecord[]>({
     queryKey: ['alerts', ui.symbol],
     queryFn: () => api(`/api/alerts?symbol=${ui.symbol}`),
@@ -153,13 +132,6 @@ export default function ChartPage() {
     refetchInterval: 5_000,
   });
 
-  const tradeExecutions = useQuery<TradeExecution[]>({
-    queryKey: ['chart-trade-executions', ui.symbol],
-    queryFn: () => api(`/api/trade/executions?symbol=${encodeURIComponent(ui.symbol)}`),
-    refetchInterval: 30_000,
-    enabled: preferences.tradingOverlays.showExecutions,
-  });
-
   const tradingLines = useMemo(
     () => buildTradingOverlayLines(ui.symbol, tradeOrders.data || [], tradePositions.data || []),
     [ui.symbol, tradeOrders.data, tradePositions.data],
@@ -168,6 +140,7 @@ export default function ChartPage() {
   const invalidate = () => {
     void qc.invalidateQueries({ queryKey: ['manual-levels', ui.symbol] });
     void qc.invalidateQueries({ queryKey: ['rr', ui.symbol] });
+    void qc.invalidateQueries({ queryKey: ['measurements', ui.symbol] });
     void qc.invalidateQueries({ queryKey: ['alerts', ui.symbol] });
     void qc.invalidateQueries({ queryKey: ['alerts-all'] });
   };
@@ -182,38 +155,6 @@ export default function ChartPage() {
       invalidate();
       // Keep Level tool active so several manual levels can be placed with
       // consecutive single clicks. Select/Escape exits drawing mode.
-    },
-  });
-
-  const freezeVisibleLevels = useMutation({
-    mutationFn: async (candidates: AutoLevel[]) => {
-      const existing = await api<ManualLevel[]>(`/api/drawings/levels?symbol=${ui.symbol}`);
-      const tick = Number(instrument.data?.tickSize || 0);
-      const createdPrices: number[] = [];
-
-      for (const level of candidates) {
-        const tolerance = Number.isFinite(tick) && tick > 0
-          ? tick / 2
-          : Math.max(1e-10, Math.abs(level.price) * 1e-8);
-        const duplicate = existing.some((item) => Math.abs(item.price - level.price) <= tolerance)
-          || createdPrices.some((price) => Math.abs(price - level.price) <= tolerance);
-        if (duplicate) continue;
-        await api(
-          '/api/drawings/levels',
-          json('POST', { symbol: ui.symbol, price: level.price, label: null }),
-        );
-        createdPrices.push(level.price);
-      }
-      return { created: createdPrices.length };
-    },
-    onSuccess: ({ created }) => {
-      void qc.invalidateQueries({ queryKey: ['manual-levels', ui.symbol] });
-      setFreezeFeedback(
-        created > 0
-          ? t('Saved {count} visible levels', { count: created })
-          : t('All visible levels are already manual'),
-      );
-      window.setTimeout(() => setFreezeFeedback(null), 3000);
     },
   });
 
@@ -262,39 +203,30 @@ export default function ChartPage() {
     },
   });
 
+  const addMeasurement = useMutation({
+    mutationFn: (input: Omit<RulerMeasurement, 'id' | 'createdAt' | 'updatedAt'>) =>
+      api<RulerMeasurement>('/api/drawings/measurements', json('POST', input)),
+    onSuccess: invalidate,
+  });
+
+  const delMeasurement = useMutation({
+    mutationFn: (id: number) => api(`/api/drawings/measurements/${id}`, { method: 'DELETE' }),
+    onSuccess: invalidate,
+  });
+
   const addAlert = useMutation({
-    mutationFn: async (input: number | {
-      price: number;
-      sourceType: 'automatic_level' | 'manual_level';
-      sourceId: number | null;
-      dedupe: true;
-    }) => {
-      const price = typeof input === 'number' ? input : input.price;
-      if (typeof input !== 'number' && input.dedupe) {
-        const existing = await api<AlertRecord[]>(`/api/alerts?symbol=${ui.symbol}`);
-        const tick = Number(instrument.data?.tickSize || 0);
-        const tolerance = Number.isFinite(tick) && tick > 0
-          ? tick / 2
-          : Math.max(1e-10, Math.abs(price) * 1e-8);
-        const duplicate = existing.find((alert) =>
-          alert.active && Math.abs(alert.price - price) <= tolerance,
-        );
-        if (duplicate) return duplicate;
-      }
-      return api<AlertRecord>(
+    mutationFn: (price: number) =>
+      api(
         '/api/alerts',
         json('POST', {
           symbol: ui.symbol,
           price,
           condition: 'touch',
           preAlertPercent: 0.25,
-          sourceType: typeof input === 'number' ? 'manual' : input.sourceType,
-          sourceId: typeof input === 'number' ? null : input.sourceId,
           telegramEnabled: true,
           triggerOnce: true,
         }),
-      );
-    },
+      ),
     onSuccess: () => {
       invalidate();
       // Keep Alert tool active. The database already supports many independent
@@ -346,96 +278,15 @@ export default function ChartPage() {
     },
   });
 
-  const cancelTradingOrders = useMutation({
-    mutationFn: async (lines: TradingOverlayLine[]) => {
-      const unique = new Map<string, TradingOverlayLine>();
-      for (const line of lines) {
-        if (!line.orderId || (line.kind !== 'order' && line.kind !== 'trigger')) continue;
-        unique.set(`${line.accountId}:${line.orderId}`, line);
-      }
-
-      const grouped = groupActiveOrders(tradeOrders.data || []);
-      const groupByOrder = new Map(
-        grouped.map((item) => [`${item.main.accountId}:${item.main.orderId}`, item] as const),
-      );
-
-      const results = [];
-      for (const line of unique.values()) {
-        const group = groupByOrder.get(`${line.accountId}:${line.orderId}`);
-        const orderIds = [...new Set([
-          ...(group?.children.map((child) => child.orderId) || []),
-          line.orderId!,
-        ])];
-        results.push(await api('/api/trade/orders/cancel-group', json('POST', {
-          accountId: line.accountId,
-          symbol: line.symbol,
-          orderIds,
-        })));
-      }
-      return results;
-    },
-    onSuccess: () => {
-      setPendingTradingCancel(null);
-      window.setTimeout(() => {
-        void qc.invalidateQueries({ queryKey: ['chart-trade-orders'] });
-        void qc.invalidateQueries({ queryKey: ['orders'] });
-      }, 350);
-    },
-  });
-
   const requestTradingLineChange = (line: TradingOverlayLine, price: number) => {
     if (!Number.isFinite(price) || price <= 0 || !line.editTarget) return;
     if (preferences.tradingOverlays.confirmChanges) setPendingTradingChange({ line, price });
     else updateTradingLine.mutate({ line, price });
   };
 
-  const requestCancelTradingOrders = (lines: TradingOverlayLine[]) => {
-    if (!config.data?.liveTradingEnabled) return;
-    const unique = [...new Map(
-      lines
-        .filter((line) => line.orderId && (line.kind === 'order' || line.kind === 'trigger'))
-        .map((line) => [`${line.accountId}:${line.orderId}`, line] as const),
-    ).values()];
-    if (unique.length) setPendingTradingCancel(unique);
-  };
-
-  const cancelOrderLabel = (count: number) => {
-    if (language === 'uk') {
-      const mod10 = count % 10;
-      const mod100 = count % 100;
-      const word = mod10 === 1 && mod100 !== 11
-        ? 'ордер'
-        : mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)
-          ? 'ордери'
-          : 'ордерів';
-      return `Скасувати ${count} ${word}`;
-    }
-    if (language === 'ru') {
-      const mod10 = count % 10;
-      const mod100 = count % 100;
-      const word = mod10 === 1 && mod100 !== 11
-        ? 'ордер'
-        : mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)
-          ? 'ордера'
-          : 'ордеров';
-      return `Отменить ${count} ${word}`;
-    }
-    return `Cancel ${count} ${count === 1 ? 'order' : 'orders'}`;
-  };
-
   useEffect(() => {
     setLivePrice(null);
-    setViewportAutoLevels([]);
-    setFreezeFeedback(null);
   }, [ui.symbol]);
-
-  const handleVisibleAutoLevelsChange = useCallback((next: AutoLevel[]) => {
-    setViewportAutoLevels((current) => {
-      const a = current.map((level) => `${level.type}:${level.price}`).join('|');
-      const b = next.map((level) => `${level.type}:${level.price}`).join('|');
-      return a === b ? current : next;
-    });
-  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -454,34 +305,6 @@ export default function ChartPage() {
 
   const currentPrice =
     livePrice || selectedTicker?.lastPrice || candles.data?.at(-1)?.close || 0;
-
-  const fundingRate = selectedTicker?.fundingRate;
-  const fundingTime = selectedTicker?.nextFundingTime;
-  const hasFunding = typeof fundingRate === 'number' && Number.isFinite(fundingRate)
-    && typeof fundingTime === 'number' && Number.isFinite(fundingTime) && fundingTime > 0;
-  const fundingCountdown = hasFunding ? formatFundingCountdown(fundingTime - fundingClock) : '—';
-  const fundingTimeLabel = hasFunding
-    ? new Intl.DateTimeFormat(language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US',
-        { dateStyle: 'short', timeStyle: 'short' }).format(fundingTime)
-    : '—';
-  const fundingTimeShort = hasFunding
-    ? new Intl.DateTimeFormat(language === 'uk' ? 'uk-UA' : language === 'ru' ? 'ru-RU' : 'en-US',
-        { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(fundingTime)
-    : '—';
-
-  // A position's estimated next payment uses mark price × size × the current
-  // indicative funding rate. A positive value means the user receives funds.
-  const fundingPositions = useMemo(() =>
-    (tradePositions.data || []).filter((p) => p.symbol === ui.symbol && p.size > 0),
-    [tradePositions.data, ui.symbol],
-  );
-  const fundingPayments = hasFunding ? fundingPositions.map((position) => ({
-    account: position.accountName,
-    side: position.side,
-    amount: position.size * (position.markPrice > 0 ? position.markPrice : position.avgPrice)
-      * fundingRate * (position.side === 'Buy' ? -1 : 1),
-  })) : [];
-  const fundingPaymentTotal = fundingPayments.reduce((sum, item) => sum + item.amount, 0);
 
   const levelReferencePrice =
     selectedTicker?.lastPrice || candles.data?.at(-1)?.close || currentPrice;
@@ -523,30 +346,6 @@ export default function ChartPage() {
     </button>
   );
 
-  const toggleTradingOverlay = (
-    key: 'showOrders' | 'showPositions' | 'showExecutions',
-  ) => {
-    const enabled = !preferences.tradingOverlays[key];
-    savePreferences({
-      ...preferences,
-      tradingOverlays: {
-        ...preferences.tradingOverlays,
-        [key]: enabled,
-        ...(key === 'showOrders' ? { showStopLoss: enabled, showTakeProfit: enabled } : {}),
-      },
-    });
-  };
-
-  const toggleTradingAccountMode = () => {
-    savePreferences({
-      ...preferences,
-      tradingOverlays: {
-        ...preferences.tradingOverlays,
-        accountDisplayMode: preferences.tradingOverlays.accountDisplayMode === 'summary' ? 'individual' : 'summary',
-      },
-    });
-  };
-
   const mutationError = [
     addLevel.error,
     delLevel.error,
@@ -554,12 +353,12 @@ export default function ChartPage() {
     addRR.error,
     updateRR.error,
     delRR.error,
+    addMeasurement.error,
+    delMeasurement.error,
     addAlert.error,
     delAlert.error,
     updateAlert.error,
     updateTradingLine.error,
-    cancelTradingOrders.error,
-    freezeVisibleLevels.error,
   ].find(Boolean) as Error | undefined;
 
   const priceChange = (selectedTicker?.price24hPcnt || 0) * 100;
@@ -569,40 +368,8 @@ export default function ChartPage() {
   return (
     <div className="page chart-page">
       <div className="page-head">
-        <div className="chart-head-info">
-          <div className="chart-heading-with-funding">
-            <h1>{ui.symbol}</h1>
-            <div className="funding-header" tabIndex={0} aria-label={t('Funding information')}>
-              <span className={hasFunding ? `funding-rate ${fundingRate > 0 ? 'positive' : fundingRate < 0 ? 'negative' : ''}` : 'funding-rate muted'}>
-                {hasFunding ? `${fundingRate > 0 ? '+' : ''}${(fundingRate * 100).toFixed(4)}%` : '—'}
-              </span>
-              <span className={`funding-timer ${hasFunding && fundingTime - fundingClock <= 5 * 60_000 ? 'funding-soon' : ''}`}>
-                <Clock3 size={14} aria-hidden="true" /> {fundingCountdown}
-              </span>
-              <span className="funding-next-time">{t('Next')}: {fundingTimeShort}</span>
-              <div className="funding-tooltip" role="tooltip">
-                <strong>{t('Funding rate')}: {hasFunding ? `${fundingRate > 0 ? '+' : ''}${(fundingRate * 100).toFixed(4)}%` : '—'}</strong>
-                {hasFunding ? (
-                  <>
-                    <div>{fundingRate > 0 ? t('Longs pay shorts') : fundingRate < 0 ? t('Shorts pay longs') : t('Neutral funding rate')}</div>
-                    <div>{t('Next funding')}: {fundingTimeLabel} · {fundingCountdown}</div>
-                    {fundingPayments.length > 0 && (
-                      <div className="funding-position-details">
-                        <strong>{t('Estimated funding for open positions')}: {formatFundingPayment(fundingPaymentTotal)}</strong>
-                        {fundingPayments.map((item, index) => (
-                          <div key={`${item.account}-${item.side}-${index}`} className="funding-position-row">
-                            <span>{item.account} · {item.side === 'Buy' ? t('Long') : t('Short')}</span>
-                            <span>{formatFundingPayment(item.amount)}</span>
-                          </div>
-                        ))}
-                        <small>{t('Estimate only. Final rate and position value may change before settlement.')}</small>
-                      </div>
-                    )}
-                  </>
-                ) : <div>{t('Funding data unavailable')}</div>}
-              </div>
-            </div>
-          </div>
+        <div>
+          <h1>{ui.symbol}</h1>
           <p>{t('Market scanner · bars · automatic levels · persistent drawings')}</p>
         </div>
 
@@ -643,55 +410,21 @@ export default function ChartPage() {
       <div className="toolbar">
         {tool('select', MousePointer2, 'Select')}
         {tool('level', Plus, 'Level')}
-        <button
-          type="button"
-          className="tool-btn"
-          disabled={!viewportAutoLevels.length || freezeVisibleLevels.isPending}
-          onClick={() => freezeVisibleLevels.mutate(viewportAutoLevels)}
-          title={t('Copies automatic levels currently visible on the chart into Manual Levels')}
-        >
-          <Pin size={15} />
-          {freezeVisibleLevels.isPending ? t('Saving…') : t('Freeze levels')}
-        </button>
         {tool('risk-reward', Ratio, 'Risk/Reward')}
+        {tool('measure', Ruler, 'Ruler')}
         {tool('alert', Bell, 'Alert')}
 
-        <span className="muted toolbar-hint">
+        <span style={{ marginLeft: 'auto' }} className="muted">
           {ui.tool === 'level'
             ? t('Click repeatedly to save levels · Esc to finish')
             : ui.tool === 'alert'
               ? t('Click repeatedly to create alerts · Esc to finish')
               : ui.tool === 'risk-reward'
                 ? t('Click Entry → Stop · Target is created automatically')
-                : freezeFeedback}
+                : ui.tool === 'measure'
+                  ? t('Drag on chart to measure move · Pin to save dashed line')
+                  : null}
         </span>
-
-        <div className="chart-overlay-toggles" aria-label={t('Trading overlays')}>
-          {([
-            ['showOrders', t('Orders')],
-            ['showPositions', t('Positions')],
-            ['showExecutions', t('Executions')],
-          ] as const).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              className={preferences.tradingOverlays[key] ? 'chart-overlay-toggle active' : 'chart-overlay-toggle'}
-              onClick={() => toggleTradingOverlay(key)}
-              aria-pressed={preferences.tradingOverlays[key]}
-            >
-              {label}
-            </button>
-          ))}
-          <button
-            type="button"
-            className={preferences.tradingOverlays.accountDisplayMode === 'summary' ? 'chart-overlay-toggle active' : 'chart-overlay-toggle'}
-            onClick={toggleTradingAccountMode}
-            aria-pressed={preferences.tradingOverlays.accountDisplayMode === 'summary'}
-            title={preferences.tradingOverlays.accountDisplayMode === 'summary' ? t('Summary across accounts') : t('Per account')}
-          >
-            {preferences.tradingOverlays.accountDisplayMode === 'summary' ? t('Summary') : t('Per account')}
-          </button>
-        </div>
       </div>
 
       {candles.error && (
@@ -712,8 +445,8 @@ export default function ChartPage() {
           manualLevels={manual.data || []}
           alerts={alerts.data || []}
           riskRewards={rr.data || []}
+          measurements={measurements.data || []}
           tradingLines={tradingLines}
-          executions={tradeExecutions.data || []}
           liveTradingEnabled={config.data?.liveTradingEnabled ?? false}
           tool={ui.tool}
           selectedRiskReward={ui.selectedRiskReward}
@@ -721,7 +454,6 @@ export default function ChartPage() {
           tickSize={instrument.data?.tickSize ?? null}
           onCreateLevel={(price) => addLevel.mutate(price)}
           onCreateAlert={(price) => addAlert.mutate(price)}
-          onCreateLevelAlert={(price, sourceType, sourceId) => addAlert.mutate({ price, sourceType, sourceId, dedupe: true })}
           onCreateRiskReward={(input) => addRR.mutate(input)}
           onSelectRiskReward={(item) => ui.selectRiskReward(item)}
           onUpdateRiskReward={(id, patch) => updateRR.mutate({ id, patch })}
@@ -730,10 +462,11 @@ export default function ChartPage() {
           onDeleteLevel={(id) => delLevel.mutate(id)}
           onDeleteAlert={(id) => delAlert.mutate(id)}
           onDeleteRiskReward={(id) => delRR.mutate(id)}
+          onCreateMeasurement={(input) => addMeasurement.mutate(input)}
+          onDeleteMeasurement={(id) => delMeasurement.mutate(id)}
+          onMeasureDraftFinished={() => ui.setTool('select')}
           onRequestTradingLineChange={requestTradingLineChange}
-          onRequestCancelTradingOrders={requestCancelTradingOrders}
           onUsePriceLevel={(price) => ui.openCalculatorAtPrice(price)}
-          onVisibleAutoLevelsChange={handleVisibleAutoLevelsChange}
           onLivePrice={(price) => setLivePrice(price)}
         />
 
@@ -858,23 +591,6 @@ export default function ChartPage() {
         body={pendingTradingChange ? <>
           <b>{pendingTradingChange.line.symbol}</b> · {pendingTradingChange.line.accountName}<br />
           {pendingTradingChange.line.kind.toUpperCase()} {num(pendingTradingChange.line.price, 8)} → <b>{num(pendingTradingChange.price, 8)}</b>
-        </> : null}
-      />
-
-      <ConfirmDialog
-        open={Boolean(pendingTradingCancel)}
-        title={pendingTradingCancel ? cancelOrderLabel(pendingTradingCancel.length) : t('Cancel order')}
-        danger
-        confirmLabel={pendingTradingCancel ? cancelOrderLabel(pendingTradingCancel.length) : t('Cancel order')}
-        onClose={() => setPendingTradingCancel(null)}
-        onConfirm={() => { if (pendingTradingCancel) cancelTradingOrders.mutate(pendingTradingCancel); }}
-        body={pendingTradingCancel ? <>
-          <b>{pendingTradingCancel[0]?.symbol || ui.symbol}</b><br />
-          {language === 'uk'
-            ? 'Буде скасовано вибрані очікуючі ордери та прив’язані до них SL/TP.'
-            : language === 'ru'
-              ? 'Будут отменены выбранные ожидающие ордера и привязанные к ним SL/TP.'
-              : 'The selected pending orders and their attached SL/TP will be cancelled.'}
         </> : null}
       />
     </div>

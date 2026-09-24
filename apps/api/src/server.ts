@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
+import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, createRulerMeasurement, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, deleteRulerMeasurement, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, listRulerMeasurements, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { appConfig } from './config.js';
 import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
 
@@ -49,6 +49,10 @@ app.get('/api/drawings/risk-rewards',async(req)=>{const q=z.object({symbol:z.str
 app.post('/api/drawings/risk-rewards',async(req,reply)=>{const b=z.object({symbol:z.string(),timeframe:z.string(),direction:z.enum(['long','short']),entry:z.number().positive(),stop:z.number().positive(),target:z.number().positive(),startTime:z.number().int().positive(),endTime:z.number().int().positive()}).parse(req.body);reply.code(201);return createRiskReward(db,b);});
 app.patch('/api/drawings/risk-rewards/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);const b=z.object({direction:z.enum(['long','short']).optional(),entry:z.number().positive().optional(),stop:z.number().positive().optional(),target:z.number().positive().optional(),startTime:z.number().int().positive().optional(),endTime:z.number().int().positive().optional()}).parse(req.body);const row=updateRiskReward(db,id,b);if(!row)return reply.code(404).send({error:'Not found'});return row;});
 app.delete('/api/drawings/risk-rewards/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);return deleteRiskReward(db,id)?{ok:true}:reply.code(404).send({error:'Not found'});});
+
+app.get('/api/drawings/measurements',async(req)=>{const q=z.object({symbol:z.string()}).parse(req.query);return listRulerMeasurements(db,q.symbol);});
+app.post('/api/drawings/measurements',async(req,reply)=>{const b=z.object({symbol:z.string(),startTime:z.number().int().positive(),endTime:z.number().int().positive(),startPrice:z.number().positive(),endPrice:z.number().positive(),displayMode:z.enum(['line','box']).optional()}).parse(req.body);reply.code(201);return createRulerMeasurement(db,{...b,displayMode:b.displayMode??'line'});});
+app.delete('/api/drawings/measurements/:id',async(req,reply)=>{const id=z.coerce.number().parse((req.params as any).id);return deleteRulerMeasurement(db,id)?{ok:true}:reply.code(404).send({error:'Not found'});});
 
 app.get('/api/alerts',async(req)=>{const q=z.object({symbol:z.string().optional(),active:z.coerce.boolean().optional()}).parse(req.query);return listAlerts(db,q.symbol,q.active??false);});
 app.post('/api/alerts',async(req,reply)=>{const b=z.object({symbol:z.string(),price:z.number().positive(),condition:z.enum(['cross_up','cross_down','touch']).optional(),preAlertPercent:z.number().min(0).max(20).nullable().optional(),sourceType:z.enum(['manual','manual_level','risk_reward','automatic_level']).optional(),sourceId:z.number().int().nullable().optional(),telegramEnabled:z.boolean().optional(),triggerOnce:z.boolean().optional()}).parse(req.body);reply.code(201);return createAlert(db,b);});
@@ -159,34 +163,7 @@ app.get('/api/trade/balances',async(req)=>{
 });
 app.get('/api/trade/positions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getPositions(id).catch(()=>[])))).flat();});
 app.get('/api/trade/orders',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getOrders(id,false).catch(()=>[])))).flat();});
-app.get('/api/trade/executions',async(req)=>{
-  const q=z.object({accountId:z.coerce.number().int().positive().optional(),symbol:z.string().regex(/^[A-Z0-9]{2,30}$/).optional()}).parse(req.query);
-  const ids=await accountIds(q.accountId);
-  return (await Promise.all(ids.map(id=>adapterFor(id).getExecutions(id,q.symbol).catch(()=>[])))).flat();
-});
-// Funding is a signed wallet transaction, not a trade execution. Only the latest
-// seven days are queried; show truncation/errors explicitly to avoid a false PnL.
-app.get('/api/journal/funding',async(req)=>{
-  const q=z.object({accountId:z.coerce.number().int().positive().optional(),symbol:z.string().regex(/^[A-Za-z0-9]{2,30}$/).optional()}).parse(req.query);
-  const ids=await accountIds(q.accountId);
-  const endTime=Date.now();
-  const startTime=endTime-7*24*60*60*1000;
-  const results=await Promise.all(ids.map(async id=>{
-    try{return {accountId:id,...await adapterFor(id).getFundingTransactions(id,startTime,endTime)};}
-    catch(error){return {accountId:id,rows:[],truncated:false,error:error instanceof Error?error.message:String(error)};}
-  }));
-  const rows=results.flatMap(result=>result.rows)
-    .filter(row=>!q.symbol||row.symbol.toUpperCase()===q.symbol.toUpperCase())
-    .sort((a,b)=>b.time-a.time);
-  return {
-    rows,
-    totalFundingUsdt:rows.reduce((sum,row)=>sum+row.amount,0),
-    currency:'USDT',periodStart:startTime,periodEnd:endTime,
-    truncated:results.some(result=>result.truncated),
-    errors:results.flatMap(result=>('error' in result && typeof result.error==='string')
-      ? [{accountId:result.accountId,error:result.error}] : []),
-  };
-});
+app.get('/api/trade/executions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getExecutions(id).catch(()=>[])))).flat();});
 app.get('/api/trade/history',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getOrders(id,true).catch(()=>[])))).flat();});
 
 const requireLive=(reply:any)=>{if(!appConfig.liveTradingEnabled){reply.code(423).send({error:'Live trading actions are disabled. Set LIVE_TRADING_ENABLED=true explicitly.'});return false;}return true;};
