@@ -550,7 +550,7 @@ export default function ChartPage() {
   const tool = (name: any, Icon: any, label: string) => (
     <button
       className={ui.tool === name ? 'tool-btn active' : 'tool-btn'}
-      onClick={() => ui.setTool(name)}
+      onClick={() => { if (name === 'measure') ui.selectRiskReward(null); ui.setTool(name); }}
     >
       <Icon size={15} />
       {t(label)}
