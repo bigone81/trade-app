@@ -269,6 +269,23 @@ export function createRulerMeasurement(db:SqliteDb, input:Omit<RulerMeasurement,
     .run(input.symbol.toUpperCase(), input.startTime, input.endTime, input.startPrice, input.endPrice, input.displayMode ?? 'line');
   return listRulerMeasurements(db, input.symbol).find((x)=>x.id===Number(result.lastInsertRowid))!;
 }
+export function updateRulerMeasurement(
+  db: SqliteDb,
+  id: number,
+  patch: Partial<Pick<RulerMeasurement, 'startTime' | 'endTime' | 'startPrice' | 'endPrice' | 'displayMode'>>,
+): RulerMeasurement | null {
+  const current: any = db.prepare('SELECT * FROM ruler_measurements WHERE id=?').get(id);
+  if (!current) return null;
+  const startTime = patch.startTime ?? Number(current.start_time);
+  const endTime = patch.endTime ?? Number(current.end_time);
+  const startPrice = patch.startPrice ?? Number(current.start_price);
+  const endPrice = patch.endPrice ?? Number(current.end_price);
+  const displayMode = patch.displayMode ?? current.display_mode;
+  db.prepare(`UPDATE ruler_measurements SET start_time=?,end_time=?,start_price=?,end_price=?,display_mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(startTime, endTime, startPrice, endPrice, displayMode, id);
+  return listRulerMeasurements(db, current.symbol).find((row) => row.id === id) ?? null;
+}
+
 export function deleteRulerMeasurement(db:SqliteDb, id:number){
   return db.prepare('DELETE FROM ruler_measurements WHERE id=?').run(id).changes > 0;
 }

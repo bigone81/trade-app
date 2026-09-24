@@ -275,6 +275,22 @@ export default function ChartPage() {
       api<RulerMeasurement>('/api/drawings/measurements', json('POST', input)),
     onSuccess: invalidate,
   });
+  const updateMeasurement = useMutation({
+    mutationFn: ({ id, patch }: { id: number; patch: Pick<RulerMeasurement, 'startTime' | 'endTime' | 'startPrice' | 'endPrice'> }) =>
+      api<RulerMeasurement>(`/api/drawings/measurements/${id}`, json('PATCH', patch)),
+    onMutate: async ({ id, patch }) => {
+      const key = ['measurements', ui.symbol];
+      await qc.cancelQueries({ queryKey: key });
+      const previous = qc.getQueryData<RulerMeasurement[]>(key);
+      qc.setQueryData<RulerMeasurement[]>(key, (old) => old?.map((item) => item.id === id ? { ...item, ...patch } : item) ?? []);
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) qc.setQueryData(['measurements', ui.symbol], context.previous);
+    },
+    onSettled: () => { void qc.invalidateQueries({ queryKey: ['measurements', ui.symbol] }); },
+  });
+
   const delMeasurement = useMutation({
     mutationFn: (id: number) => api(`/api/drawings/measurements/${id}`, { method: 'DELETE' }),
     onSuccess: invalidate,
@@ -574,6 +590,7 @@ export default function ChartPage() {
     delRR.error,
     addMeasurement.error,
     delMeasurement.error,
+    updateMeasurement.error,
     addAlert.error,
     delAlert.error,
     updateAlert.error,
@@ -756,6 +773,7 @@ export default function ChartPage() {
           onDeleteRiskReward={(id) => delRR.mutate(id)}
           onCreateMeasurement={(input) => addMeasurement.mutate(input)}
           onDeleteMeasurement={(id) => delMeasurement.mutate(id)}
+          onUpdateMeasurement={(id, patch) => updateMeasurement.mutate({ id, patch })}
           onMeasureDraftFinished={() => ui.setTool('select')}
           onRequestTradingLineChange={requestTradingLineChange}
           onRequestCancelTradingOrders={requestCancelTradingOrders}

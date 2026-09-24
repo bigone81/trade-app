@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
-import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, createRulerMeasurement, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, deleteRulerMeasurement, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, listRulerMeasurements, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
+import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, createRulerMeasurement, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, deleteRulerMeasurement, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, listRulerMeasurements, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRulerMeasurement, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { appConfig } from './config.js';
 import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
 
@@ -52,6 +52,18 @@ app.delete('/api/drawings/risk-rewards/:id',async(req,reply)=>{const id=z.coerce
 
 app.get('/api/drawings/measurements',async(req)=>{const q=z.object({symbol:z.string()}).parse(req.query);return listRulerMeasurements(db,q.symbol);});
 app.post('/api/drawings/measurements',async(req,reply)=>{const b=z.object({symbol:z.string(),startTime:z.number().int().positive(),endTime:z.number().int().positive(),startPrice:z.number().positive(),endPrice:z.number().positive(),displayMode:z.enum(['line','box']).optional()}).parse(req.body);reply.code(201);return createRulerMeasurement(db,{...b,displayMode:b.displayMode??'line'});});
+app.patch('/api/drawings/measurements/:id',async(req,reply)=>{
+  const id=z.coerce.number().int().positive().parse((req.params as any).id);
+  const patch=z.object({
+    startTime:z.number().int().positive().optional(),
+    endTime:z.number().int().positive().optional(),
+    startPrice:z.number().finite().positive().optional(),
+    endPrice:z.number().finite().positive().optional(),
+    displayMode:z.enum(['line','box']).optional(),
+  }).strict().parse(req.body);
+  const updated=updateRulerMeasurement(db,id,patch);
+  return updated??reply.code(404).send({error:'Measurement not found'});
+});
 app.delete('/api/drawings/measurements/:id',async(req,reply)=>{const id=z.coerce.number().int().positive().parse((req.params as any).id);return deleteRulerMeasurement(db,id)?{ok:true}:reply.code(404).send({error:'Not found'});});
 
 app.get('/api/alerts',async(req)=>{const q=z.object({symbol:z.string().optional(),active:z.coerce.boolean().optional()}).parse(req.query);return listAlerts(db,q.symbol,q.active??false);});

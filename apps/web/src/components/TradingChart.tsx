@@ -55,6 +55,7 @@ interface Props {
   onDeleteRiskReward: (id: number) => void;
   onCreateMeasurement: (input: Omit<RulerMeasurement, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onDeleteMeasurement: (id: number) => void;
+  onUpdateMeasurement: (id: number, patch: Pick<RulerMeasurement, 'startTime' | 'endTime' | 'startPrice' | 'endPrice'>) => void;
   onMeasureDraftFinished: () => void;
   onRequestTradingLineChange: (line: TradingOverlayLine, price: number) => void;
   onRequestCancelTradingOrders: (lines: TradingOverlayLine[]) => void;
@@ -1569,6 +1570,7 @@ export default function TradingChart(p: Props) {
         tickSize={p.tickSize}
         onCreate={p.onCreateMeasurement}
         onDelete={p.onDeleteMeasurement}
+        onUpdate={p.onUpdateMeasurement}
         onFinishDraft={p.onMeasureDraftFinished}
       />
 

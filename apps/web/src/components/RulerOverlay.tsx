@@ -24,6 +24,7 @@ interface Props {
   tickSize: string | null;
   onCreate: (input: Omit<RulerMeasurement, 'id' | 'createdAt' | 'updatedAt'>) => void;
   onDelete: (id: number) => void;
+  onUpdate: (id: number, patch: Pick<RulerMeasurement, 'startTime' | 'endTime' | 'startPrice' | 'endPrice'>) => void;
   onFinishDraft: () => void;
 }
 
@@ -94,6 +95,7 @@ export default function RulerOverlay({
   tickSize,
   onCreate,
   onDelete,
+  onUpdate,
   onFinishDraft,
 }: Props) {
   const { language } = useI18n();
@@ -101,6 +103,21 @@ export default function RulerOverlay({
   const [draft, setDraft] = useState<DraftMeasurement | null>(null);
   const draftRef = useRef<DraftMeasurement | null>(null);
   const [creating, setCreating] = useState(false);
+  type Endpoint = 'start' | 'end';
+  type EditDrag = {
+    id: number;
+    endpoint: Endpoint;
+    before: RulerMeasurement;
+    current: RulerMeasurement;
+    pointerX: number;
+    pointerY: number;
+    moved: boolean;
+  };
+  const [editDrag, setEditDrag] = useState<EditDrag | null>(null);
+  const editDragRef = useRef<EditDrag | null>(null);
+  const updateRef = useRef(onUpdate);
+  updateRef.current = onUpdate;
+
   const finishDraftRef = useRef(onFinishDraft);
   finishDraftRef.current = onFinishDraft;
   const step = useMemo(() => candleStep(candles, timeframe), [candles, timeframe]);
@@ -164,6 +181,8 @@ export default function RulerOverlay({
     setDraft(null);
     draftRef.current = null;
     setCreating(false);
+    editDragRef.current = null;
+    setEditDrag(null);
   }, [symbol]);
 
   useEffect(() => {
@@ -172,6 +191,8 @@ export default function RulerOverlay({
         setDraft(null);
         draftRef.current = null;
         setCreating(false);
+        editDragRef.current = null;
+        setEditDrag(null);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -218,6 +239,65 @@ export default function RulerOverlay({
       chart.applyOptions({ handleScroll: true, handleScale: true });
     };
   }, [creating, chart, host, series]);
+
+  // Persisted endpoints are independent: editing one never moves the other.
+  // We use window pointer listeners so the handle does not lose drag when the
+  // pointer moves outside its small hit area or over a candle/price label.
+  useEffect(() => {
+    if (!editDrag || !series || !chart || !host) return;
+    chart.applyOptions({ handleScroll: false, handleScale: false });
+    const move = (event: PointerEvent) => {
+      const current = editDragRef.current;
+      if (!current) return;
+      const rect = host.getBoundingClientRect();
+      const maxX = Math.max(1, chart.timeScale().width() - 1);
+      const x = Math.max(0, Math.min(maxX, event.clientX - rect.left));
+      const y = Math.max(1, Math.min(host.clientHeight - 27, event.clientY - rect.top));
+      const time = xToTime(x);
+      const price = series.coordinateToPrice(y);
+      if (typeof time !== 'number' || !Number.isFinite(price) || price === null || price <= 0) return;
+      const nextItem = { ...current.current, ...(current.endpoint === 'start'
+        ? { startTime: time, startPrice: price }
+        : { endTime: time, endPrice: price }) };
+      const next = {
+        ...current, current: nextItem,
+        moved: current.moved || Math.hypot(event.clientX - current.pointerX, event.clientY - current.pointerY) > 3,
+      };
+      editDragRef.current = next;
+      setEditDrag(next);
+    };
+    const finish = (event: PointerEvent) => {
+      const current = editDragRef.current;
+      editDragRef.current = null;
+      setEditDrag(null);
+      chart.applyOptions({ handleScroll: true, handleScale: true });
+      if (event.type === 'pointercancel' || !current?.moved) return;
+      const { startTime, endTime, startPrice, endPrice } = current.current;
+      if (startTime === endTime && startPrice === endPrice) return;
+      updateRef.current(current.id, { startTime, endTime, startPrice, endPrice });
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', finish, { once: true });
+    window.addEventListener('pointercancel', finish, { once: true });
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      chart.applyOptions({ handleScroll: true, handleScale: true });
+    };
+  }, [editDrag?.id, editDrag?.endpoint, chart, series, host]);
+
+  const beginEdit = (item: RulerMeasurement, endpoint: 'start' | 'end', event: ReactPointerEvent<SVGCircleElement>) => {
+    if (!host || tool === 'measure') return;
+    event.stopPropagation();
+    event.preventDefault();
+    const next = {
+      id: item.id, endpoint, before: item, current: { ...item },
+      pointerX: event.clientX, pointerY: event.clientY, moved: false,
+    };
+    editDragRef.current = next;
+    setEditDrag(next);
+  };
 
   const beginDraw = (event: ReactPointerEvent<SVGRectElement>) => {
     if (tool !== 'measure' || !series || !host || !chart) return;
@@ -271,27 +351,45 @@ export default function RulerOverlay({
     const width = Math.max(1, right - left);
     const height = Math.max(1, bottom - top);
     const midX = left + width / 2;
-    const midY = top + height / 2;
     const stats = measurementStats(item, step);
-    const sign = stats.delta >= 0 ? '+' : '';
-    const label = `${sign}${stats.percent.toFixed(2)}% · ${sign}${formatPrice(stats.delta, tickSize)} · ${stats.bars}b`;
+    const signedPercent = `${stats.percent >= 0 ? '+' : ''}${stats.percent.toFixed(2)}%`;
+    const signedDelta = `${stats.delta >= 0 ? '+' : ''}${formatPrice(stats.delta, tickSize)}`;
+    const duration = formatDuration(stats.seconds);
+    const badgeWidth = persisted ? 83 : 248;
+    const badgeHeight = persisted ? 25 : 44;
+    const badgeX = Math.max(6, Math.min(host.clientWidth - badgeWidth - 6, midX - badgeWidth / 2));
+    const badgeY = Math.max(5, top >= badgeHeight + 9 ? top - badgeHeight - 7 : Math.min(host.clientHeight - badgeHeight - 6, bottom + 7));
+    const persistedItem = persisted && typeof id === 'number' ? items.find((row) => row.id === id) : undefined;
+    const tooltip = `${formatPrice(item.startPrice, tickSize)} → ${formatPrice(item.endPrice, tickSize)} | ${signedPercent} (${signedDelta}) | ${stats.bars} bars | ${duration}`;
 
     return (
       <g key={key} className={persisted ? 'measure-object persisted' : 'measure-object draft'}>
+        <title>{tooltip}</title>
         {!persisted && <rect className={stats.delta >= 0 ? 'measure-box positive' : 'measure-box negative'} x={left} y={top} width={width} height={height} rx="3" />}
         <line className={persisted ? 'measure-line persisted' : 'measure-line draft'} x1={x1} y1={y1} x2={x2} y2={y2} />
-        <circle className="measure-point" cx={x1} cy={y1} r="3.5" />
-        <circle className="measure-point" cx={x2} cy={y2} r="3.5" />
-        <g className="measure-label" transform={`translate(${Math.max(8, Math.min(host.clientWidth - 150, midX - 70))}, ${Math.max(12, top - 26)})`}>
-          <rect width="140" height="22" rx="6" />
-          <text x="8" y="14">{label}</text>
+        {persisted && <line className="measure-path-hit" x1={x1} y1={y1} x2={x2} y2={y2} />}
+        <g className="measure-label" transform={`translate(${badgeX}, ${badgeY})`}>
+          <rect width={badgeWidth} height={badgeHeight} rx="6" />
+          {persisted
+            ? <text x={badgeWidth / 2} y="17" textAnchor="middle">{signedPercent}</text>
+            : <>
+                <text x="12" y="18" className="measure-value">{signedPercent}   ·   {signedDelta}</text>
+                <text x="12" y="34" className="measure-secondary">{stats.bars} {language === 'uk' ? 'барів' : language === 'ru' ? 'баров' : 'bars'}   ·   {duration}</text>
+              </>}
         </g>
-        {persisted && typeof id === 'number' && (
-          <g className="measure-delete" transform={`translate(${Math.max(8, Math.min(host.clientWidth - 16, midX + 78))}, ${Math.max(12, top - 15)})`} onPointerDown={(event) => { event.stopPropagation(); onDelete(id); }}>
+        {persisted && persistedItem ? <>
+          <circle className="measure-handle-hit" cx={x1} cy={y1} r="12" onPointerDown={(event) => beginEdit(persistedItem, 'start', event)} />
+          <circle className="measure-handle-hit" cx={x2} cy={y2} r="12" onPointerDown={(event) => beginEdit(persistedItem, 'end', event)} />
+          <circle className="measure-handle" cx={x1} cy={y1} r="4" />
+          <circle className="measure-handle" cx={x2} cy={y2} r="4" />
+          <g className="measure-delete" transform={`translate(${Math.max(10, Math.min(host.clientWidth - 11, badgeX + badgeWidth + 10))}, ${badgeY + badgeHeight / 2})`} onPointerDown={(event) => { event.stopPropagation(); onDelete(persistedItem.id); }}>
             <circle r="8" />
             <text textAnchor="middle" y="4">×</text>
           </g>
-        )}
+        </> : <>
+          <circle className="measure-point" cx={x1} cy={y1} r="4" />
+          <circle className="measure-point" cx={x2} cy={y2} r="4" />
+        </>}
       </g>
     );
   };
@@ -302,9 +400,9 @@ export default function RulerOverlay({
   return (
     <>
       <svg className="chart-overlay measure-overlay" width={host.clientWidth} height={host.clientHeight} data-version={version}>
-        {items.map((item) => renderMeasurement(item.id, item, true, item.id))}
-        {draft ? renderMeasurement('draft', draft, false) : null}
         {tool === 'measure' && <rect className="measure-capture" x="0" y="0" width={host.clientWidth} height={host.clientHeight} onPointerDown={beginDraw} />}
+        {items.map((item) => renderMeasurement(item.id, editDrag?.id === item.id ? editDrag.current : item, true, item.id))}
+        {draft ? renderMeasurement('draft', draft, false) : null}
       </svg>
 
       {draft && draft.finalized && draftStats && (
