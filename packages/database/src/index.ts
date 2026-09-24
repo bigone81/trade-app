@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AlertRecord, ManualLevel, RiskReward, RulerMeasurement } from '@trade/shared';
+import { isRealTradeExecution } from '@trade/shared';
 
 export type SqliteDb = DatabaseSync;
 
@@ -34,7 +35,6 @@ CREATE TABLE IF NOT EXISTS risk_rewards (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_risk_rewards_symbol_tf ON risk_rewards(symbol, timeframe);
-
 CREATE TABLE IF NOT EXISTS ruler_measurements (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   symbol TEXT NOT NULL,
@@ -259,24 +259,16 @@ export function deleteRiskReward(db:SqliteDb,id:number){return db.prepare('DELET
 
 export function listRulerMeasurements(db: SqliteDb, symbol: string): RulerMeasurement[] {
   return db.prepare('SELECT * FROM ruler_measurements WHERE symbol=? ORDER BY id DESC').all(symbol.toUpperCase()).map((r:any)=>({
-    id:r.id,
-    symbol:r.symbol,
-    startTime:Number(r.start_time),
-    endTime:Number(r.end_time),
-    startPrice:Number(r.start_price),
-    endPrice:Number(r.end_price),
-    displayMode:r.display_mode === 'box' ? 'box' : 'line',
-    createdAt:r.created_at,
-    updatedAt:r.updated_at,
+    id:r.id, symbol:r.symbol, startTime:Number(r.start_time), endTime:Number(r.end_time),
+    startPrice:Number(r.start_price), endPrice:Number(r.end_price),
+    displayMode:r.display_mode === 'box' ? 'box' : 'line', createdAt:r.created_at, updatedAt:r.updated_at,
   }));
 }
-
 export function createRulerMeasurement(db:SqliteDb, input:Omit<RulerMeasurement,'id'|'createdAt'|'updatedAt'>): RulerMeasurement {
   const result=db.prepare(`INSERT INTO ruler_measurements(symbol,start_time,end_time,start_price,end_price,display_mode) VALUES(?,?,?,?,?,?)`)
     .run(input.symbol.toUpperCase(), input.startTime, input.endTime, input.startPrice, input.endPrice, input.displayMode ?? 'line');
   return listRulerMeasurements(db, input.symbol).find((x)=>x.id===Number(result.lastInsertRowid))!;
 }
-
 export function deleteRulerMeasurement(db:SqliteDb, id:number){
   return db.prepare('DELETE FROM ruler_measurements WHERE id=?').run(id).changes > 0;
 }
@@ -569,6 +561,8 @@ export function syncJournalBybitOrder(db:SqliteDb,input:{accountId:number;accoun
 
 export function recordJournalBybitExecution(db:SqliteDb,input:{accountId:number;accountName:string;execution:any}){
   const x=input.execution||{};
+  // Defense in depth for callers other than the live worker.
+  if(!isRealTradeExecution(x.execType))return null;
   const execId=String(x.execId||'');
   if(!execId)return null;
   const orderId=String(x.orderId||'');

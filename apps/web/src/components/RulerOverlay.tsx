@@ -101,6 +101,8 @@ export default function RulerOverlay({
   const [draft, setDraft] = useState<DraftMeasurement | null>(null);
   const draftRef = useRef<DraftMeasurement | null>(null);
   const [creating, setCreating] = useState(false);
+  const finishDraftRef = useRef(onFinishDraft);
+  finishDraftRef.current = onFinishDraft;
   const step = useMemo(() => candleStep(candles, timeframe), [candles, timeframe]);
 
   const timeToX = (time: number) => {
@@ -162,7 +164,7 @@ export default function RulerOverlay({
     setDraft(null);
     draftRef.current = null;
     setCreating(false);
-  }, [symbol, timeframe]);
+  }, [symbol]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -202,7 +204,7 @@ export default function RulerOverlay({
         const finalized: DraftMeasurement = { ...current, active: false, finalized: true };
         draftRef.current = finalized;
         setDraft(finalized);
-        onFinishDraft();
+        finishDraftRef.current();
       }
     };
 
@@ -215,7 +217,7 @@ export default function RulerOverlay({
       window.removeEventListener('pointercancel', finish);
       chart.applyOptions({ handleScroll: true, handleScale: true });
     };
-  }, [creating, chart, host, onFinishDraft, series]);
+  }, [creating, chart, host, series]);
 
   const beginDraw = (event: ReactPointerEvent<SVGRectElement>) => {
     if (tool !== 'measure' || !series || !host || !chart) return;
@@ -237,10 +239,10 @@ export default function RulerOverlay({
     if (!draft) return;
     onCreate({
       symbol,
-      startTime: Math.min(draft.startTime, draft.endTime),
-      endTime: Math.max(draft.startTime, draft.endTime),
-      startPrice: draft.startTime <= draft.endTime ? draft.startPrice : draft.endPrice,
-      endPrice: draft.startTime <= draft.endTime ? draft.endPrice : draft.startPrice,
+      startTime: draft.startTime,
+      endTime: draft.endTime,
+      startPrice: draft.startPrice,
+      endPrice: draft.endPrice,
       displayMode: 'line',
     });
     setDraft(null);
