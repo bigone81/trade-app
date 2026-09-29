@@ -1,0 +1,1 @@
+ssh edgedesk "cd /opt/trade-app && git pull origin main && docker compose build && docker compose up -d && docker compose ps"
