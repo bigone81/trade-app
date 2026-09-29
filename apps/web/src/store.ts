@@ -2,7 +2,9 @@ import { create } from 'zustand';
 import type { DrawingTool, RiskReward } from '@trade/shared';
 
 const readNumber = (key: string, fallback: number) => {
-  const value = Number(localStorage.getItem(key));
+  const raw = localStorage.getItem(key);
+  if (raw === null || raw.trim() === '') return fallback;
+  const value = Number(raw);
   return Number.isFinite(value) ? value : fallback;
 };
 
