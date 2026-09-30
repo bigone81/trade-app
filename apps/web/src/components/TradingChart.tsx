@@ -390,7 +390,9 @@ export default function TradingChart(p: Props) {
   const restoringViewRef = useRef(false);
   const saveViewTimerRef = useRef<number | null>(null);
   const viewSymbolRef = useRef(p.symbol);
+  const viewTimeframeRef = useRef(p.timeframe);
   const pendingSymbolLiveRef = useRef(false);
+  const pendingTimeframeLiveRef = useRef(false);
   const appliedViewKeyRef = useRef<string | null>(null);
   const appliedViewChartRef = useRef<IChartApi | null>(null);
   const viewRestoreTimerRef = useRef<number | null>(null);
@@ -415,6 +417,28 @@ export default function TradingChart(p: Props) {
     () => buildTradeConnections(p.executions, p.symbol, preferences.tradingOverlays.accountIds),
     [p.executions, p.symbol, preferences.tradingOverlays.accountIds],
   );
+
+  useEffect(() => {
+    // Mark the transition before setData can emit range events. Keep it pending
+    // through an empty/loading dataset, including a quick A -> B -> A switch.
+    const symbolChanged = viewSymbolRef.current !== p.symbol;
+    const timeframeChanged = viewTimeframeRef.current !== p.timeframe;
+    if (symbolChanged || timeframeChanged) {
+      viewSymbolRef.current = p.symbol;
+      viewTimeframeRef.current = p.timeframe;
+      pendingSymbolLiveRef.current ||= symbolChanged;
+      pendingTimeframeLiveRef.current ||= timeframeChanged;
+      restoringViewRef.current = true;
+      if (viewRestoreTimerRef.current !== null) {
+        window.clearTimeout(viewRestoreTimerRef.current);
+        viewRestoreTimerRef.current = null;
+      }
+      if (saveViewTimerRef.current !== null) {
+        window.clearTimeout(saveViewTimerRef.current);
+        saveViewTimerRef.current = null;
+      }
+    }
+  }, [p.symbol, p.timeframe]);
 
   // The Lightweight Charts markers follow candle-time coordinates, while the
   // chart's price autoscale can also change without a time-range event (e.g.
@@ -721,16 +745,18 @@ export default function TradingChart(p: Props) {
       const range = chart.timeScale().getVisibleLogicalRange();
       if (!range) return;
       const atEdge = range.to >= latestLogicalRef.current - 0.5;
-      followLiveRef.current = atEdge;
-      setIsAtLiveEdge(atEdge);
       if (!restoringViewRef.current) {
+        followLiveRef.current = atEdge;
+        setIsAtLiveEdge(atEdge);
         if (saveViewTimerRef.current) window.clearTimeout(saveViewTimerRef.current);
+        const step = timeframeSeconds(p.timeframe);
+        const view = {
+          fromTime: candleTimeAtLogical(timelineCandlesRef.current, range.from, step),
+          toTime: candleTimeAtLogical(timelineCandlesRef.current, range.to, step),
+        };
         saveViewTimerRef.current = window.setTimeout(() => {
-          const step = timeframeSeconds(p.timeframe);
-          writeChartView(p.symbol, p.timeframe, {
-            fromTime: candleTimeAtLogical(timelineCandlesRef.current, range.from, step),
-            toTime: candleTimeAtLogical(timelineCandlesRef.current, range.to, step),
-          });
+          writeChartView(p.symbol, p.timeframe, view);
+          saveViewTimerRef.current = null;
         }, 250);
       }
     };
@@ -742,6 +768,10 @@ export default function TradingChart(p: Props) {
       chart.timeScale().unsubscribeVisibleTimeRangeChange(refresh);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(refresh);
       observer.disconnect();
+      if (saveViewTimerRef.current !== null) {
+        window.clearTimeout(saveViewTimerRef.current);
+        saveViewTimerRef.current = null;
+      }
     };
   }, [chart, p.symbol, p.timeframe]);
 
@@ -824,11 +854,12 @@ export default function TradingChart(p: Props) {
     const last = p.candles.at(-1) || null;
     lastLiveCandleRef.current = last;
     latestLogicalRef.current = Math.max(0, p.candles.length - 1);
-    window.requestAnimationFrame(() => series.priceScale().applyOptions({ autoScale: true }));
+    const frame = window.requestAnimationFrame(() => series.priceScale().applyOptions({ autoScale: true }));
+    return () => window.cancelAnimationFrame(frame);
   }, [series, p.candles, p.symbol, p.timeframe]);
 
   useEffect(() => {
-    if (!series || !chart || !p.symbol || !p.timeframe) return;
+    if (!series || !chart || !p.symbol || !p.timeframe || !p.candles.length) return;
 
     let stopped = false;
     let socket: WebSocket | null = null;
@@ -922,6 +953,7 @@ export default function TradingChart(p: Props) {
       };
 
       socket.onmessage = (event) => {
+        if (stopped) return;
         try {
           const message = JSON.parse(String(event.data));
           if (message.topic === topicKline && Array.isArray(message.data)) {
@@ -976,11 +1008,12 @@ export default function TradingChart(p: Props) {
       if (pingTimer) window.clearInterval(pingTimer);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (socket) {
+        socket.onmessage = null;
         socket.onclose = null;
         socket.close();
       }
     };
-  }, [series, chart, p.symbol, p.timeframe]);
+  }, [series, chart, p.symbol, p.timeframe, Boolean(p.candles.length)]);
 
   useEffect(() => {
     if (!series) return;
@@ -1054,40 +1087,41 @@ export default function TradingChart(p: Props) {
 
 
   useEffect(() => {
-    // Switching symbols always opens at the live edge. Do not restore the
-    // previous scroll position of a symbol when returning to it later.
-    if (viewSymbolRef.current !== p.symbol) {
-      viewSymbolRef.current = p.symbol;
-      pendingSymbolLiveRef.current = true;
-      restoringViewRef.current = true;
-      if (saveViewTimerRef.current !== null) {
-        window.clearTimeout(saveViewTimerRef.current);
-        saveViewTimerRef.current = null;
-      }
-    }
-
-    if (!chart || !p.candles.length) return; // Wait for the selected symbol's candles.
+    // This runs after setData, never against the previous TF or a loading array.
+    if (!chart || !series || !p.candles.length) return;
     if (appliedViewChartRef.current !== chart) {
       appliedViewChartRef.current = chart;
       appliedViewKeyRef.current = null;
     }
     const viewKey = `${p.symbol}|${p.timeframe}`;
     // Incoming bars/refetches must not undo a user's manual pan or zoom.
-    if (!pendingSymbolLiveRef.current && appliedViewKeyRef.current === viewKey) return;
+    if (!pendingSymbolLiveRef.current && !pendingTimeframeLiveRef.current
+      && appliedViewKeyRef.current === viewKey) return;
 
     restoringViewRef.current = true;
     if (viewRestoreTimerRef.current !== null) window.clearTimeout(viewRestoreTimerRef.current);
+    // setData may have emitted a range event before initial view restoration.
+    // Do not let that pending save overwrite the view we are about to restore.
+    if (saveViewTimerRef.current !== null) {
+      window.clearTimeout(saveViewTimerRef.current);
+      saveViewTimerRef.current = null;
+    }
 
-    if (pendingSymbolLiveRef.current) {
-      // Restore both default zoom and live position on every symbol selection.
-      series?.priceScale().applyOptions({ autoScale: true });
-      chart.timeScale().applyOptions({ barSpacing: DEFAULT_BAR_SPACING, rightOffset: futureBars });
-      chart.timeScale().scrollToRealTime();
+    if (pendingSymbolLiveRef.current || pendingTimeframeLiveRef.current) {
+      // Symbol changes reset zoom; TF changes retain bar spacing, as LIVE does.
+      // An immediate scroll avoids an old TF's animated target winning later.
+      series.priceScale().applyOptions({ autoScale: true });
+      chart.timeScale().applyOptions({
+        ...(pendingSymbolLiveRef.current ? { barSpacing: DEFAULT_BAR_SPACING } : {}),
+        rightOffset: futureBars,
+      });
+      chart.timeScale().scrollToPosition(futureBars, false);
       followLiveRef.current = true;
       setIsAtLiveEdge(true);
       pendingSymbolLiveRef.current = false;
+      pendingTimeframeLiveRef.current = false;
     } else {
-      // Preserve the existing saved-view behavior when only timeframe changes.
+      // Preserve saved positions when the chart is first opened/remounted.
       const stored = readChartView(p.symbol, p.timeframe);
       if (stored) {
         const step = timeframeSeconds(p.timeframe);
@@ -1112,7 +1146,7 @@ export default function TradingChart(p: Props) {
       restoringViewRef.current = false;
       viewRestoreTimerRef.current = null;
     }, 100);
-  }, [chart, series, p.symbol, p.timeframe, p.candles.length, futureBars]);
+  }, [chart, series, p.symbol, p.timeframe, p.candles, futureBars]);
 
   useEffect(() => () => {
     if (viewRestoreTimerRef.current !== null) window.clearTimeout(viewRestoreTimerRef.current);

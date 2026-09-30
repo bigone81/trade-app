@@ -47,6 +47,8 @@ interface InstrumentRules {
   qtyStep: string;
 }
 
+const EMPTY_CANDLES: Candle[] = [];
+
 const formatFundingCountdown = (milliseconds: number) => {
   const remaining = Math.max(0, Math.floor(milliseconds / 1000));
   const hours = Math.floor(remaining / 3600);
@@ -109,9 +111,10 @@ export default function ChartPage() {
 
   const candles = useQuery<Candle[]>({
     queryKey: ['candles', ui.symbol, ui.timeframe],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       api(
         `/api/market/candles?symbol=${ui.symbol}&interval=${ui.timeframe}&limit=1000`,
+        { signal },
       ),
     staleTime: 300_000,
     refetchInterval: 300_000,
@@ -747,7 +750,7 @@ export default function ChartPage() {
       <div className="chart-scanner-layout">
         <TradingChart
           symbol={ui.symbol}
-          candles={candles.data || []}
+          candles={candles.data || EMPTY_CANDLES}
           autoLevels={visibleAuto}
           manualLevels={manual.data || []}
           alerts={alerts.data || []}
