@@ -25,7 +25,7 @@ import RiskRewardOverlay from './RiskRewardOverlay';
 import { candleTimeAtLogical, logicalAtTime, timeframeSeconds } from '../chartTime';
 import RulerOverlay from './RulerOverlay';
 import { buildTradeConnections, type TradeConnection } from '../tradeConnections';
-import { readChartBarSpacing, readChartView, resolvedTheme, usePreferences, writeChartBarSpacing, writeChartView } from '../preferences';
+import { DEFAULT_BAR_SPACING, readChartBarSpacing, readChartView, resolvedTheme, usePreferences, writeChartBarSpacing, writeChartView } from '../preferences';
 import { useI18n } from '../i18n';
 
 interface Props {
@@ -777,9 +777,18 @@ export default function TradingChart(p: Props) {
       const x = event.clientX - bounds.left;
       if (x < host.clientWidth - scaleWidth) return;
 
-      // Reset only the price axis; preserve horizontal zoom and position.
+      // Restore the default zoom and live position along with price autoscale.
       window.requestAnimationFrame(() => {
         series.priceScale().applyOptions({ autoScale: true });
+        barSpacingRef.current = DEFAULT_BAR_SPACING;
+        writeChartBarSpacing(DEFAULT_BAR_SPACING);
+        chart.timeScale().applyOptions({
+          barSpacing: DEFAULT_BAR_SPACING,
+          rightOffset: futureBars,
+        });
+        chart.timeScale().scrollToRealTime();
+        followLiveRef.current = true;
+        setIsAtLiveEdge(true);
         setOverlayVersion((value) => value + 1);
       });
     };
@@ -794,7 +803,7 @@ export default function TradingChart(p: Props) {
       host.removeEventListener('wheel', redraw);
       host.removeEventListener('dblclick', doubleClick);
     };
-  }, [chart, series]);
+  }, [chart, series, futureBars]);
 
   useEffect(() => {
     if (!series) return;

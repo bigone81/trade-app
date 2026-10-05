@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { candleTimeAtLogical, logicalAtTime, timeframeSeconds } from '../src/chartTime.ts';
+import { DEFAULT_BAR_SPACING } from '../src/preferences.ts';
 
 const parse = (path) => {
   const text = readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -245,7 +246,7 @@ test('debounced view saving captures the candles at the time of the pan', () => 
   h.unmount();
 });
 
-test('price-axis double click only resets vertical scale; LIVE preserves zoom', () => {
+test('price-axis double click resets and saves default zoom at live edge; LIVE preserves zoom', () => {
   const effect = component.body.statements.find((node) =>
     ts.isExpressionStatement(node) && node.getText(chartSource).includes("host.addEventListener('dblclick'"));
   const live = component.body.statements.find((node) =>
@@ -259,27 +260,52 @@ test('price-axis double click only resets vertical scale; LIVE preserves zoom', 
   h.pan();
   h.events.length = 0;
   const priceOptions = [];
+  const timeOptions = [];
+  const liveStates = [];
   const context = {
     ...h.scope,
+    DEFAULT_BAR_SPACING,
+    futureBars: 32,
+    setIsAtLiveEdge: (value) => liveStates.push(value),
     hostRef: { current: {
       clientWidth: 1200,
       getBoundingClientRect: () => ({ left: 0 }),
       addEventListener: (name, handler) => handlers.set(name, handler),
       removeEventListener() {},
     } },
-    chart: { ...h.scope.chart, priceScale: () => ({ width: () => 64 }) },
+    chart: {
+      timeScale: () => ({
+        ...h.scope.chart.timeScale(),
+        applyOptions: (options) => {
+          timeOptions.push(options);
+          h.scope.chart.timeScale().applyOptions(options);
+        },
+      }),
+      priceScale: () => ({ width: () => 64 }),
+    },
     series: { priceScale: () => ({ applyOptions: (options) => priceOptions.push(options) }) },
     useEffect: (fn) => fn(),
     window: { requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; } },
   };
   vm.runInNewContext(compile(`${effect.getText(chartSource)}\n${live.getText(chartSource)}\nglobalThis.live = returnToLive;`), context);
+  handlers.get('dblclick')({ clientX: 600 });
+  frames.splice(0).forEach((fn) => fn());
+  assert.equal(priceOptions.length, 0, 'double click within the plot must not reset the view');
+  assert.equal(h.spacing, 2.5);
+  assert.deepEqual(h.events, []);
   handlers.get('dblclick')({ clientX: 1180 });
   frames.splice(0).forEach((fn) => fn());
   assert.equal(priceOptions.length, 1);
   assert.equal(priceOptions[0].autoScale, true);
-  assert.equal(h.spacing, 2.5);
-  assert.equal(h.range.to, 200);
-  assert.deepEqual(h.events, []);
+  assert.equal(h.spacing, 3);
+  assert.equal(h.scope.barSpacingRef.current, 3);
+  assert.equal(h.savedSpacings.at(-1), 3, 'reset zoom must survive a reload');
+  assert.equal(timeOptions.at(-1).rightOffset, 32, 'preserve the configured future-bar margin');
+  assert.equal(h.scope.followLiveRef.current, true);
+  assert.deepEqual(liveStates, [true]);
+  assert.deepEqual(h.events, ['animatedLive']);
+  h.zoom(2.5);
+  h.events.length = 0;
   context.live();
   assert.deepEqual(h.events, ['animatedLive']);
   assert.equal(h.spacing, 2.5);

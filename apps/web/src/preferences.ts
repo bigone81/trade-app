@@ -222,7 +222,7 @@ export function usePreferences() {
 }
 
 const CHART_BAR_SPACING_KEY = 'trade.chart-bar-spacing.v1';
-const DEFAULT_BAR_SPACING = 3;
+export const DEFAULT_BAR_SPACING = 3;
 
 export function readChartBarSpacing(): number {
   try {
