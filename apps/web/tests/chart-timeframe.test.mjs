@@ -32,21 +32,23 @@ const bars = (step = 300, end = 1_800_000_000) => Array.from({ length: 1000 }, (
   time: end - (999 - index) * step, open: 100, high: 102, low: 99, close: 101, volume: 1,
 }));
 
-function chartHarness(initialTf = '5', initialBars = bars(), storedView = null) {
+function chartHarness(initialTf = '5', initialBars = bars(), storedView = null, storedSpacing = 3) {
   const ref = (current) => ({ current });
   const events = [];
   const sockets = [];
   const timers = new Map();
   const listeners = new Set();
   const saved = [];
+  const savedSpacings = [];
   let timerId = 0;
   let effects = [];
   let registered = [];
   let range = { from: 800, to: 1023 };
   let data = [];
-  let spacing = 9;
+  let spacing = storedSpacing;
   const notify = () => listeners.forEach((listener) => listener());
   const timeScale = {
+    options: () => ({ barSpacing: spacing }),
     getVisibleLogicalRange: () => range,
     subscribeVisibleTimeRangeChange: (fn) => listeners.add(fn),
     subscribeVisibleLogicalRangeChange: (fn) => listeners.add(fn),
@@ -61,7 +63,7 @@ function chartHarness(initialTf = '5', initialBars = bars(), storedView = null) 
     },
     scrollToRealTime: () => { events.push('animatedLive'); },
     fitContent: () => { events.push('fit'); },
-    setVisibleLogicalRange: (next) => { range = next; events.push('restore'); notify(); },
+    setVisibleLogicalRange: (next) => { range = next; spacing = 1200 / (next.to - next.from); events.push('restore'); notify(); },
   };
   const chart = { timeScale: () => timeScale };
   const series = {
@@ -74,7 +76,7 @@ function chartHarness(initialTf = '5', initialBars = bars(), storedView = null) 
     },
   };
   const scope = {
-    chart, series, futureBars: 24, DEFAULT_BAR_SPACING: 6,
+    chart, series, futureBars: 24, barSpacingRef: ref(storedSpacing),
     candleTimeAtLogical, logicalAtTime, timeframeSeconds,
     hostRef: ref({}), viewSymbolRef: ref('BTCUSDT'), viewTimeframeRef: ref(initialTf),
     pendingSymbolLiveRef: ref(false), pendingTimeframeLiveRef: ref(false),
@@ -86,6 +88,7 @@ function chartHarness(initialTf = '5', initialBars = bars(), storedView = null) 
     preferences: { chart: { autoFollowLive: true } },
     setTimelineCandles() {}, setOverlayVersion() {}, setIsAtLiveEdge() {}, setWsState() {},
     readChartView: () => storedView,
+    writeChartBarSpacing: (value) => savedSpacings.push(value),
     writeChartView: (symbol, tf, view) => saved.push({ symbol, tf, ...view }),
     useEffect: (fn, deps) => registered.push({ fn, deps }),
     ResizeObserver: class { observe() {} disconnect() {} },
@@ -113,16 +116,17 @@ function chartHarness(initialTf = '5', initialBars = bars(), storedView = null) 
       ? { ...effect, cleanup: effect.fn() } : effects[i]);
   };
   return {
-    render, events, sockets, saved, scope,
+    render, events, sockets, saved, savedSpacings, scope,
     get data() { return data; }, get range() { return range; }, get spacing() { return spacing; },
     flush: () => { const pending = [...timers.values()]; timers.clear(); pending.forEach((fn) => fn()); },
     pan: () => { range = { from: 100, to: 200 }; notify(); },
+    zoom: (value) => { spacing = value; notify(); },
     unmount: () => effects.forEach((effect) => effect.cleanup?.()),
   };
 }
 
 test('TF installation waits for history, goes live after setData and retains zoom', () => {
-  const h = chartHarness('60', bars(3600), { fromTime: 1_790_000_000, toTime: 1_790_100_000 });
+  const h = chartHarness('60', bars(3600), { fromTime: 1_790_000_000, toTime: 1_790_100_000 }, 9);
   h.render('60', bars(3600));
   h.flush();
   assert.ok(h.events.includes('restore'), 'initial mount still restores the saved view');
@@ -190,14 +194,42 @@ test('live bars and same-TF history refresh preserve a manual pan; stale sockets
   h.unmount();
 });
 
-test('symbol selection continues to reset zoom and go live', () => {
+test('symbol selection retains user zoom and the default right margin', () => {
   const h = chartHarness();
   h.render('5', bars());
   h.flush();
+  h.zoom(4);
   h.render('5', bars(), 'SOLUSDT');
-  assert.equal(h.spacing, 6);
+  assert.equal(h.spacing, 4);
   assert.equal(h.range.to, 1023);
   h.unmount();
+});
+
+test('fresh view starts at 3px with 24 future bars instead of fitting all history', () => {
+  const h = chartHarness();
+  h.render('5', bars());
+  assert.equal(h.spacing, 3);
+  assert.equal(h.range.to, 1023);
+  assert.ok(!h.events.includes('fit'));
+  h.unmount();
+});
+
+test('zoom survives immediate navigation and reload, overriding an older saved range', () => {
+  const h = chartHarness();
+  h.render('5', bars());
+  h.flush();
+  h.zoom(2.5);
+  assert.deepEqual(h.savedSpacings, [2.5], 'zoom is saved without waiting for the position debounce');
+  h.render('60', []);
+  h.render('60', bars(3600), 'SOLUSDT');
+  assert.equal(h.spacing, 2.5);
+  h.unmount();
+  const reloaded = chartHarness('60', bars(3600), { fromTime: 1_790_000_000, toTime: 1_790_100_000 }, h.savedSpacings.at(-1));
+  reloaded.render('60', bars(3600));
+  assert.ok(reloaded.events.includes('restore'));
+  assert.equal(reloaded.spacing, 2.5);
+  assert.deepEqual(reloaded.savedSpacings, [], 'view restoration must not overwrite the saved zoom');
+  reloaded.unmount();
 });
 
 test('debounced view saving captures the candles at the time of the pan', () => {
@@ -210,6 +242,47 @@ test('debounced view saving captures the candles at the time of the pan', () => 
   h.flush();
   assert.equal(h.saved.at(-1).fromTime, history[100].time);
   assert.equal(h.saved.at(-1).toTime, history[200].time);
+  h.unmount();
+});
+
+test('price-axis double click only resets vertical scale; LIVE preserves zoom', () => {
+  const effect = component.body.statements.find((node) =>
+    ts.isExpressionStatement(node) && node.getText(chartSource).includes("host.addEventListener('dblclick'"));
+  const live = component.body.statements.find((node) =>
+    ts.isVariableStatement(node) && node.declarationList.declarations[0].name.getText(chartSource) === 'returnToLive');
+  const handlers = new Map();
+  const frames = [];
+  const h = chartHarness();
+  h.render('5', bars());
+  h.flush();
+  h.zoom(2.5);
+  h.pan();
+  h.events.length = 0;
+  const priceOptions = [];
+  const context = {
+    ...h.scope,
+    hostRef: { current: {
+      clientWidth: 1200,
+      getBoundingClientRect: () => ({ left: 0 }),
+      addEventListener: (name, handler) => handlers.set(name, handler),
+      removeEventListener() {},
+    } },
+    chart: { ...h.scope.chart, priceScale: () => ({ width: () => 64 }) },
+    series: { priceScale: () => ({ applyOptions: (options) => priceOptions.push(options) }) },
+    useEffect: (fn) => fn(),
+    window: { requestAnimationFrame: (fn) => { frames.push(fn); return frames.length; } },
+  };
+  vm.runInNewContext(compile(`${effect.getText(chartSource)}\n${live.getText(chartSource)}\nglobalThis.live = returnToLive;`), context);
+  handlers.get('dblclick')({ clientX: 1180 });
+  frames.splice(0).forEach((fn) => fn());
+  assert.equal(priceOptions.length, 1);
+  assert.equal(priceOptions[0].autoScale, true);
+  assert.equal(h.spacing, 2.5);
+  assert.equal(h.range.to, 200);
+  assert.deepEqual(h.events, []);
+  context.live();
+  assert.deepEqual(h.events, ['animatedLive']);
+  assert.equal(h.spacing, 2.5);
   h.unmount();
 });
 

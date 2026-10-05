@@ -25,7 +25,7 @@ import RiskRewardOverlay from './RiskRewardOverlay';
 import { candleTimeAtLogical, logicalAtTime, timeframeSeconds } from '../chartTime';
 import RulerOverlay from './RulerOverlay';
 import { buildTradeConnections, type TradeConnection } from '../tradeConnections';
-import { readChartView, resolvedTheme, usePreferences, writeChartView } from '../preferences';
+import { readChartBarSpacing, readChartView, resolvedTheme, usePreferences, writeChartBarSpacing, writeChartView } from '../preferences';
 import { useI18n } from '../i18n';
 
 interface Props {
@@ -79,7 +79,6 @@ type TradingDrag = { line: TradingOverlayLine; originalPrice: number; price: num
 type WsState = 'connecting' | 'live' | 'reconnecting' | 'offline';
 
 const DEFAULT_FUTURE_BARS = 24;
-const DEFAULT_BAR_SPACING = 6;
 
 const decimalsFromTickSize = (tickSize: string) => {
   const text = String(tickSize || '').trim().toLowerCase();
@@ -338,6 +337,8 @@ export default function TradingChart(p: Props) {
   const latestLogicalRef = useRef(Math.max(0, p.candles.length - 1));
   const lastPriceReportAtRef = useRef(0);
   const restoringViewRef = useRef(false);
+  const [initialBarSpacing] = useState(readChartBarSpacing);
+  const barSpacingRef = useRef(initialBarSpacing);
   const saveViewTimerRef = useRef<number | null>(null);
   const viewSymbolRef = useRef(p.symbol);
   const viewTimeframeRef = useRef(p.timeframe);
@@ -460,6 +461,7 @@ export default function TradingChart(p: Props) {
       grid: { vertLines: { color: preferences.chart.showGrid ? (theme === 'light' ? '#e8edf3' : '#111a25') : 'transparent' }, horzLines: { color: preferences.chart.showGrid ? (theme === 'light' ? '#e8edf3' : '#111a25') : 'transparent' } },
       rightPriceScale: { borderColor: theme === 'light' ? '#d7dee7' : '#202b3a' },
       timeScale: {
+        barSpacing: barSpacingRef.current,
         borderColor: theme === 'light' ? '#d7dee7' : '#202b3a',
         timeVisible: true,
         secondsVisible: false,
@@ -696,6 +698,12 @@ export default function TradingChart(p: Props) {
       if (!range) return;
       const atEdge = range.to >= latestLogicalRef.current - 0.5;
       if (!restoringViewRef.current) {
+        const spacing = chart.timeScale().options().barSpacing;
+        if (spacing !== barSpacingRef.current) {
+          barSpacingRef.current = spacing;
+          // Save zoom immediately so quick navigation/reload cannot cancel it.
+          writeChartBarSpacing(spacing);
+        }
         followLiveRef.current = atEdge;
         setIsAtLiveEdge(atEdge);
         if (saveViewTimerRef.current) window.clearTimeout(saveViewTimerRef.current);
@@ -769,17 +777,9 @@ export default function TradingChart(p: Props) {
       const x = event.clientX - bounds.left;
       if (x < host.clientWidth - scaleWidth) return;
 
-      // Keep Lightweight Charts' native price-axis double-click behavior, then
-      // explicitly restore autoscale and return the time axis to the live edge.
+      // Reset only the price axis; preserve horizontal zoom and position.
       window.requestAnimationFrame(() => {
         series.priceScale().applyOptions({ autoScale: true });
-        chart.timeScale().applyOptions({
-          barSpacing: DEFAULT_BAR_SPACING,
-          rightOffset: futureBars,
-        });
-        chart.timeScale().scrollToRealTime();
-        followLiveRef.current = true;
-        setIsAtLiveEdge(true);
         setOverlayVersion((value) => value + 1);
       });
     };
@@ -794,7 +794,7 @@ export default function TradingChart(p: Props) {
       host.removeEventListener('wheel', redraw);
       host.removeEventListener('dblclick', doubleClick);
     };
-  }, [chart, series, futureBars]);
+  }, [chart, series]);
 
   useEffect(() => {
     if (!series) return;
@@ -1060,11 +1060,11 @@ export default function TradingChart(p: Props) {
     }
 
     if (pendingSymbolLiveRef.current || pendingTimeframeLiveRef.current) {
-      // Symbol changes reset zoom; TF changes retain bar spacing, as LIVE does.
+      // Symbol and TF changes retain the shared zoom, as LIVE does.
       // An immediate scroll avoids an old TF's animated target winning later.
       series.priceScale().applyOptions({ autoScale: true });
       chart.timeScale().applyOptions({
-        ...(pendingSymbolLiveRef.current ? { barSpacing: DEFAULT_BAR_SPACING } : {}),
+        barSpacing: barSpacingRef.current,
         rightOffset: futureBars,
       });
       chart.timeScale().scrollToPosition(futureBars, false);
@@ -1082,13 +1082,15 @@ export default function TradingChart(p: Props) {
           to: logicalAtTime(p.candles, stored.toTime, step)!,
         };
         chart.timeScale().setVisibleLogicalRange(restoredRange);
+        // Restore the historical position, but use the shared zoom rather than
+        // the density implied by an older symbol/timeframe's saved range.
+        chart.timeScale().applyOptions({ barSpacing: barSpacingRef.current });
         const atEdge = restoredRange.to >= p.candles.length - 1 - 0.5;
         followLiveRef.current = atEdge;
         setIsAtLiveEdge(atEdge);
       } else {
-        chart.timeScale().fitContent();
-        chart.timeScale().applyOptions({ rightOffset: futureBars });
-        chart.timeScale().scrollToRealTime();
+        chart.timeScale().applyOptions({ barSpacing: barSpacingRef.current, rightOffset: futureBars });
+        chart.timeScale().scrollToPosition(futureBars, false);
         followLiveRef.current = true;
         setIsAtLiveEdge(true);
       }

@@ -221,6 +221,27 @@ export function usePreferences() {
   return { preferences, save };
 }
 
+const CHART_BAR_SPACING_KEY = 'trade.chart-bar-spacing.v1';
+const DEFAULT_BAR_SPACING = 3;
+
+export function readChartBarSpacing(): number {
+  try {
+    const spacing = Number(localStorage.getItem(CHART_BAR_SPACING_KEY));
+    return Number.isFinite(spacing) && spacing >= 0.5 ? spacing : DEFAULT_BAR_SPACING;
+  } catch {
+    return DEFAULT_BAR_SPACING;
+  }
+}
+
+export function writeChartBarSpacing(spacing: number) {
+  if (!Number.isFinite(spacing) || spacing < 0.5) return;
+  try {
+    localStorage.setItem(CHART_BAR_SPACING_KEY, String(spacing));
+  } catch {
+    // Browser privacy/storage restrictions should not break the chart.
+  }
+}
+
 export interface StoredChartView {
   fromTime: number;
   toTime: number;
