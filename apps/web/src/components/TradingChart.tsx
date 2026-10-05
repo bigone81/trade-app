@@ -22,6 +22,7 @@ import type {
   TradingOverlayLine,
 } from '@trade/shared';
 import RiskRewardOverlay from './RiskRewardOverlay';
+import { candleTimeAtLogical, logicalAtTime, timeframeSeconds } from '../chartTime';
 import RulerOverlay from './RulerOverlay';
 import { buildTradeConnections, type TradeConnection } from '../tradeConnections';
 import { readChartView, resolvedTheme, usePreferences, writeChartView } from '../preferences';
@@ -289,61 +290,10 @@ const rgba = (hex: string, opacity: number) => {
 
 const toLineStyle = (style: 'solid' | 'dashed' | 'dotted') => style === 'dashed' ? LineStyle.Dashed : style === 'dotted' ? LineStyle.Dotted : LineStyle.Solid;
 
-const timeframeSeconds = (timeframe: string) => {
-  if (timeframe === 'D') return 86_400;
-  if (timeframe === 'W') return 604_800;
-  const minutes = Number(timeframe);
-  return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 : 900;
-};
-
 const intervalBucket = (unixSeconds: number, timeframe: string) => {
   const step = timeframeSeconds(timeframe);
   return Math.floor(unixSeconds / step) * step;
 };
-
-function candleTimeAtLogical(candles: Candle[], logical: number, fallbackStep: number) {
-  if (!candles.length) return intervalBucket(Date.now() / 1000, String(fallbackStep / 60));
-  if (candles.length === 1) return Math.round(candles[0]!.time + logical * fallbackStep);
-
-  if (logical <= 0) {
-    return Math.round(candles[0]!.time + logical * fallbackStep);
-  }
-
-  const lastIndex = candles.length - 1;
-  if (logical >= lastIndex) {
-    return Math.round(candles[lastIndex]!.time + (logical - lastIndex) * fallbackStep);
-  }
-
-  const base = Math.floor(logical);
-  const fraction = logical - base;
-  const a = candles[base]!;
-  const b = candles[Math.min(lastIndex, base + 1)]!;
-  const span = Math.max(1, b.time - a.time);
-  return Math.round(a.time + span * fraction);
-}
-
-function logicalAtTime(candles: Candle[], time: number, fallbackStep: number) {
-  if (!candles.length) return 0;
-  if (candles.length === 1) return (time - candles[0]!.time) / fallbackStep;
-
-  if (time <= candles[0]!.time) return (time - candles[0]!.time) / fallbackStep;
-
-  const lastIndex = candles.length - 1;
-  if (time >= candles[lastIndex]!.time) {
-    return lastIndex + (time - candles[lastIndex]!.time) / fallbackStep;
-  }
-
-  let lo = 0;
-  let hi = lastIndex;
-  while (hi - lo > 1) {
-    const mid = Math.floor((lo + hi) / 2);
-    if (candles[mid]!.time <= time) lo = mid;
-    else hi = mid;
-  }
-  const a = candles[lo]!;
-  const b = candles[hi]!;
-  return lo + (time - a.time) / Math.max(1, b.time - a.time);
-}
 
 export default function TradingChart(p: Props) {
   const { preferences } = usePreferences();
@@ -754,8 +704,10 @@ export default function TradingChart(p: Props) {
           fromTime: candleTimeAtLogical(timelineCandlesRef.current, range.from, step),
           toTime: candleTimeAtLogical(timelineCandlesRef.current, range.to, step),
         };
+        if (view.fromTime === null || view.toTime === null) return;
+        const savedView = { fromTime: view.fromTime, toTime: view.toTime };
         saveViewTimerRef.current = window.setTimeout(() => {
-          writeChartView(p.symbol, p.timeframe, view);
+          writeChartView(p.symbol, p.timeframe, savedView);
           saveViewTimerRef.current = null;
         }, 250);
       }
@@ -1126,8 +1078,8 @@ export default function TradingChart(p: Props) {
       if (stored) {
         const step = timeframeSeconds(p.timeframe);
         const restoredRange = {
-          from: logicalAtTime(p.candles, stored.fromTime, step),
-          to: logicalAtTime(p.candles, stored.toTime, step),
+          from: logicalAtTime(p.candles, stored.fromTime, step)!,
+          to: logicalAtTime(p.candles, stored.toTime, step)!,
         };
         chart.timeScale().setVisibleLogicalRange(restoredRange);
         const atEdge = restoredRange.to >= p.candles.length - 1 - 0.5;
@@ -1478,7 +1430,7 @@ export default function TradingChart(p: Props) {
       time,
       timeframeSeconds(p.timeframe),
     );
-    return (chart.timeScale() as any).logicalToCoordinate(logical) as number | null;
+    return logical === null ? null : (chart.timeScale() as any).logicalToCoordinate(logical) as number | null;
   };
 
   const priceScaleWidth = chart ? Number((chart.priceScale('right') as any).width?.() || 64) : 64;
@@ -1579,7 +1531,9 @@ export default function TradingChart(p: Props) {
         {liveLabel}
       </button>
 
+      {/* Remount to discard unfinished drags when the timeline changes. */}
       <RiskRewardOverlay
+        key={`${p.symbol}|${p.timeframe}`}
         chart={chart}
         series={series}
         host={hostRef.current}

@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { QueryClient, QueryObserver } from '@tanstack/react-query';
+import { candleTimeAtLogical, logicalAtTime, timeframeSeconds } from '../src/chartTime.ts';
 
 const parse = (path) => {
   const text = readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -74,6 +75,7 @@ function chartHarness(initialTf = '5', initialBars = bars(), storedView = null) 
   };
   const scope = {
     chart, series, futureBars: 24, DEFAULT_BAR_SPACING: 6,
+    candleTimeAtLogical, logicalAtTime, timeframeSeconds,
     hostRef: ref({}), viewSymbolRef: ref('BTCUSDT'), viewTimeframeRef: ref(initialTf),
     pendingSymbolLiveRef: ref(false), pendingTimeframeLiveRef: ref(false),
     restoringViewRef: ref(false), saveViewTimerRef: ref(null), viewRestoreTimerRef: ref(null),

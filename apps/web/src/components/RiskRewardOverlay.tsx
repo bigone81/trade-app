@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import type { IChartApi, ISeriesApi, UTCTimestamp } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, Logical, UTCTimestamp } from 'lightweight-charts';
 import type { Candle, RiskReward } from '@trade/shared';
 import { calculateRiskReward } from '@trade/domain';
 import { useI18n } from '../i18n';
+import { candleTimeAtLogical, logicalAtTime, timeframeSeconds } from '../chartTime';
 
 type DragKind = 'entry' | 'stop' | 'target' | 'startTime' | 'endTime' | 'move';
 
@@ -18,26 +19,6 @@ interface Props {
   onUpdate: (id: number, p: Partial<RiskReward>) => void;
   onDelete: (id: number) => void;
 }
-
-function candleStep(candles: Candle[]) {
-  if (candles.length < 2) return 60;
-  const diffs: number[] = [];
-  for (let i = 1; i < candles.length && diffs.length < 40; i += 1) {
-    const d = candles[i]!.time - candles[i - 1]!.time;
-    if (d > 0) diffs.push(d);
-  }
-  diffs.sort((a, b) => a - b);
-  return diffs[Math.floor(diffs.length / 2)] || 60;
-}
-
-const timeframeSeconds = (timeframe: string) => {
-  if (timeframe === 'D') return 86_400;
-  if (timeframe === 'W') return 604_800;
-  const minutes = Number(timeframe);
-  return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 : 900;
-};
-
-type BarGeometry = { sourceStep: number; sourceAnchor: number; logicalAnchor: number };
 
 const directionFromGeometry = (entry: number, stop: number) => stop < entry ? 'long' as const : 'short' as const;
 const targetAtRatio = (entry: number, stop: number, ratio: number) => {
@@ -83,82 +64,22 @@ export default function RiskRewardOverlay({
     item: RiskReward;
     startPrice: number | null;
     startTime: number | null;
-    barGeometry: BarGeometry | null;
   } | null>(null);
 
-  const step = useMemo(() => candleStep(candles), [candles]);
+  const step = timeframeSeconds(timeframe);
 
   const timeToX = (time: number) => {
     if (!chart) return null;
     const direct = chart.timeScale().timeToCoordinate(time as UTCTimestamp);
     if (direct !== null) return direct;
-    if (candles.length < 2) return null;
-
-    let logical: number;
-    if (time <= candles[0]!.time) {
-      logical = (time - candles[0]!.time) / step;
-    } else if (time >= candles[candles.length - 1]!.time) {
-      logical = candles.length - 1 + (time - candles[candles.length - 1]!.time) / step;
-    } else {
-      let lo = 0;
-      let hi = candles.length - 1;
-      while (hi - lo > 1) {
-        const mid = Math.floor((lo + hi) / 2);
-        if (candles[mid]!.time <= time) lo = mid;
-        else hi = mid;
-      }
-      const a = candles[lo]!;
-      const b = candles[hi]!;
-      logical = lo + (time - a.time) / Math.max(1, b.time - a.time);
-    }
-    return (chart.timeScale() as any).logicalToCoordinate(logical) as number | null;
+    const logical = logicalAtTime(candles, time, step);
+    return logical === null ? null : chart.timeScale().logicalToCoordinate(logical as Logical);
   };
 
   const xToTime = (x: number) => {
-    if (!chart || candles.length < 2) return null;
-    const logical = (chart.timeScale() as any).coordinateToLogical(x) as number | null;
-    if (logical === null || !Number.isFinite(logical)) return null;
-    const base = Math.floor(logical);
-    const fraction = logical - base;
-
-    if (base < 0) return Math.round(candles[0]!.time + logical * step);
-    if (base >= candles.length - 1) {
-      return Math.round(candles[candles.length - 1]!.time + (logical - (candles.length - 1)) * step);
-    }
-
-    const a = candles[base]!;
-    const b = candles[base + 1]!;
-    return Math.round(a.time + (b.time - a.time) * fraction);
-  };
-
-  // R/R objects created at/around the live edge should keep their visual
-  // bar geometry when another timeframe is opened. Otherwise a 30-bar 5m
-  // object becomes ~2.5 bars wide on 1h and appears to jump far left because
-  // the chart reserves the same number of future bars on every timeframe.
-  // Old historical objects remain pinned to their real Unix timestamps.
-  const barGeometryFor = (item: RiskReward): BarGeometry | null => {
-    if (!chart || candles.length < 1 || item.timeframe === timeframe) return null;
-    const sourceStep = timeframeSeconds(item.timeframe);
-    const sourceAnchor = Math.floor(Date.now() / 1000 / sourceStep) * sourceStep;
-    // Treat an object as a live/planning drawing while its right edge is no
-    // more than two source bars behind the current source-timeframe bar.
-    if (item.endTime < sourceAnchor - sourceStep * 2) return null;
-    return { sourceStep, sourceAnchor, logicalAnchor: candles.length - 1 };
-  };
-
-  const timeToXWithGeometry = (time: number, geometry: BarGeometry | null) => {
     if (!chart) return null;
-    if (!geometry) return timeToX(time);
-    const logical = geometry.logicalAnchor + (time - geometry.sourceAnchor) / geometry.sourceStep;
-    return (chart.timeScale() as any).logicalToCoordinate(logical) as number | null;
-  };
-
-  const xToTimeWithGeometry = (x: number, geometry: BarGeometry | null) => {
-    if (!chart) return null;
-    if (!geometry) return xToTime(x);
-    const logical = (chart.timeScale() as any).coordinateToLogical(x) as number | null;
-    if (logical === null || !Number.isFinite(logical)) return null;
-    return Math.round(geometry.sourceAnchor + (logical - geometry.logicalAnchor) * geometry.sourceStep);
+    const logical = chart.timeScale().coordinateToLogical(x);
+    return logical === null ? null : candleTimeAtLogical(candles, logical, step);
   };
 
   useEffect(() => {
@@ -192,16 +113,15 @@ export default function RiskRewardOverlay({
         const price = series.coordinateToPrice(y);
         if (price && price > 0) next = { ...next, [drag.kind]: price };
       } else if (drag.kind === 'startTime' || drag.kind === 'endTime') {
-        const t = xToTimeWithGeometry(x, drag.barGeometry);
-        const minStep = drag.barGeometry?.sourceStep ?? step;
+        const t = xToTime(x);
         if (typeof t === 'number') {
-          if (drag.kind === 'startTime') next.startTime = Math.min(t, next.endTime - Math.max(1, minStep));
-          else next.endTime = Math.max(t, next.startTime + Math.max(1, minStep));
+          if (drag.kind === 'startTime') next.startTime = Math.min(t, next.endTime - 1);
+          else next.endTime = Math.max(t, next.startTime + 1);
         }
       } else {
         const currentPrice = series.coordinateToPrice(y);
-        const currentTime = xToTimeWithGeometry(x, drag.barGeometry);
-        if (currentPrice && drag.startPrice && currentTime && drag.startTime) {
+        const currentTime = xToTime(x);
+        if (currentPrice !== null && drag.startPrice !== null && currentTime !== null && drag.startTime !== null) {
           const priceDelta = currentPrice - drag.startPrice;
           const timeDelta = currentTime - drag.startTime;
           next = {
@@ -247,7 +167,7 @@ export default function RiskRewardOverlay({
       window.removeEventListener('pointercancel', finish);
       chart.applyOptions({ handleScroll: true, handleScale: true });
     };
-  }, [drag, series, chart, host, onUpdate, step]);
+  }, [drag, series, chart, host, onUpdate, step, candles]);
 
   const display = useMemo(
     () => items.map((item) => (draft?.id === item.id ? draft : item)),
@@ -263,13 +183,11 @@ export default function RiskRewardOverlay({
     const rect = host.getBoundingClientRect();
     const y = event.clientY - rect.top;
     const x = event.clientX - rect.left;
-    const barGeometry = barGeometryFor(item);
     setDrag({
       kind,
       item,
       startPrice: series.coordinateToPrice(y),
-      startTime: xToTimeWithGeometry(x, barGeometry),
-      barGeometry,
+      startTime: xToTime(x),
     });
   };
 
@@ -294,9 +212,8 @@ export default function RiskRewardOverlay({
     <>
       <svg className="chart-overlay rr-overlay" width={host.clientWidth} height={host.clientHeight}>
         {display.map((r) => {
-          const geometry = drag?.item.id === r.id ? drag.barGeometry : barGeometryFor(r);
-          const x1 = timeToXWithGeometry(r.startTime, geometry);
-          const x2 = timeToXWithGeometry(r.endTime, geometry);
+          const x1 = timeToX(r.startTime);
+          const x2 = timeToX(r.endTime);
           const entryY = series.priceToCoordinate(r.entry);
           const stopY = series.priceToCoordinate(r.stop);
           const targetY = series.priceToCoordinate(r.target);
@@ -304,7 +221,7 @@ export default function RiskRewardOverlay({
 
           const left = Math.min(x1, x2);
           const right = Math.max(x1, x2);
-          const width = Math.max(34, right - left);
+          const width = right - left;
           const rewardTop = Math.min(entryY, targetY);
           const riskTop = Math.min(entryY, stopY);
           const rewardHeight = Math.abs(targetY - entryY);
