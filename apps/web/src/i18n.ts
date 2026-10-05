@@ -5,6 +5,7 @@ type Vars = Record<string, string | number>;
 type Dict = Record<string, string>;
 
 const ru: Dict = {
+  'Chart fullscreen':'Только график','Exit fullscreen':'Выйти из полноэкранного режима','Previous coin':'Предыдущая монета','Next coin':'Следующая монета','Timeframe':'Таймфрейм',
   'Chart':'График','Trade':'Торговля','Alerts':'Оповещения','Journal':'Дневник','Settings':'Настройки','private terminal':'личный терминал',
   'English':'English','Українська':'Українська','Русский':'Русский','Language':'Язык','Interface language':'Язык интерфейса','General':'Общие',
   'System':'Системная','Light':'Светлая','Dark':'Тёмная','Theme':'Тема','Appearance':'Оформление',
@@ -58,6 +59,7 @@ const ru: Dict = {
 };
 
 const uk: Dict = {
+  'Chart fullscreen':'Лише графік','Exit fullscreen':'Вийти з повноекранного режиму','Previous coin':'Попередня монета','Next coin':'Наступна монета','Timeframe':'Таймфрейм',
   'Chart':'Графік','Trade':'Торгівля','Alerts':'Сповіщення','Journal':'Щоденник','Settings':'Налаштування','private terminal':'приватний термінал',
   'English':'English','Українська':'Українська','Русский':'Русский','Language':'Мова','Interface language':'Мова інтерфейсу','General':'Загальні',
   'System':'Системна','Light':'Світла','Dark':'Темна','Theme':'Тема','Appearance':'Вигляд',

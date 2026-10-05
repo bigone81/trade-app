@@ -4,6 +4,10 @@ import {
   Bell,
   Calculator,
   Clock3,
+  ChevronUp,
+  ChevronDown,
+  Maximize,
+  Minimize,
   MousePointer2,
   Pin,
   Plus,
@@ -31,6 +35,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { buildTradingOverlayLines, groupActiveOrders } from '../tradeGrouping';
 import { usePreferences } from '../preferences';
 import { useI18n } from '../i18n';
+import { useChartFullscreen } from '../useChartFullscreen';
 
 interface MarketTicker {
   symbol: string;
@@ -48,6 +53,7 @@ interface InstrumentRules {
 }
 
 const EMPTY_CANDLES: Candle[] = [];
+const TIMEFRAMES = [['1', '1m'], ['3', '3m'], ['5', '5m'], ['15', '15m'], ['30', '30m'], ['60', '1H'], ['240', '4H'], ['D', '1D'], ['W', '1W']];
 
 const formatFundingCountdown = (milliseconds: number) => {
   const remaining = Math.max(0, Math.floor(milliseconds / 1000));
@@ -550,6 +556,13 @@ export default function ChartPage() {
       .sort((a, b) => b.turnover24h - a.turnover24h);
   }, [tickers.data, tickerSearch, ui.minTurnoverMillions]);
 
+  const fullscreen = useChartFullscreen({
+    symbols: filteredTickers.map((ticker) => ticker.symbol),
+    symbol: ui.symbol,
+    onSymbolChange: ui.setSymbol,
+    blocked: ui.drawerOpen || Boolean(pendingTradingChange || pendingTradingCancel),
+  });
+
   const tool = (name: any, Icon: any, label: string) => (
     <button
       className={ui.tool === name ? 'tool-btn active' : 'tool-btn'}
@@ -607,7 +620,7 @@ export default function ChartPage() {
   const regularCount = levels.data?.limitLevels.length || 0;
 
   return (
-    <div className="page chart-page">
+    <div ref={fullscreen.hostRef} tabIndex={-1} className={`page chart-page${fullscreen.active ? ' chart-fullscreen' : ''}`}>
       <div className="page-head">
         <div className="chart-head-info">
           <div className="chart-heading-with-funding">
@@ -652,23 +665,17 @@ export default function ChartPage() {
             value={ui.timeframe}
             onChange={(event) => ui.setTimeframe(event.target.value)}
           >
-            {[
-              ['1', '1m'],
-              ['3', '3m'],
-              ['5', '5m'],
-              ['15', '15m'],
-              ['30', '30m'],
-              ['60', '1H'],
-              ['240', '4H'],
-              ['D', '1D'],
-              ['W', '1W'],
-            ].map(([value, label]) => (
+            {TIMEFRAMES.map(([value, label]) => (
               <option key={value} value={value}>
                 {label}
               </option>
             ))}
           </select>
-
+          <button type="button" className="btn secondary" onClick={fullscreen.toggle}
+            title={`${t('Chart fullscreen')} (F)`} aria-label={`${t('Chart fullscreen')} (F)`}
+            aria-keyshortcuts="F" disabled={ui.drawerOpen || Boolean(pendingTradingChange || pendingTradingCancel)}>
+            <Maximize size={15} />
+          </button>
 
           <button
             className="btn secondary"
@@ -748,6 +755,27 @@ export default function ChartPage() {
       )}
 
       <div className="chart-scanner-layout">
+        {fullscreen.active && (
+          <div className="chart-fullscreen-strip">
+            <div className="chart-fullscreen-summary" aria-live="polite" aria-atomic="true">
+              <strong>{ui.symbol}</strong>
+              <span>{TIMEFRAMES.find(([value]) => value === ui.timeframe)?.[1]}</span>
+              <span>{fullscreen.index + 1}/{fullscreen.count}</span>
+            </div>
+            <div className="chart-fullscreen-actions">
+              <button type="button" className="icon-btn" title={`${t('Previous coin')} (↑)`} aria-label={t('Previous coin')}
+                disabled={fullscreen.index <= 0 || ui.drawerOpen || Boolean(pendingTradingChange || pendingTradingCancel)} onClick={() => fullscreen.step(-1)}><ChevronUp size={16} /></button>
+              <button type="button" className="icon-btn" title={`${t('Next coin')} (↓)`} aria-label={t('Next coin')}
+                disabled={fullscreen.index >= fullscreen.count - 1 || ui.drawerOpen || Boolean(pendingTradingChange || pendingTradingCancel)} onClick={() => fullscreen.step(1)}><ChevronDown size={16} /></button>
+              <select className="select" aria-label={t('Timeframe')} value={ui.timeframe} onChange={(event) => ui.setTimeframe(event.target.value)}>
+                {TIMEFRAMES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+              <span className="chart-fullscreen-hint">↑ ↓ · F / Esc</span>
+            </div>
+            <button type="button" className="icon-btn chart-fullscreen-exit" onClick={fullscreen.exit}
+              title={`${t('Exit fullscreen')} (F / Esc)`} aria-label={t('Exit fullscreen')}><Minimize size={16} /></button>
+          </div>
+        )}
         <TradingChart
           symbol={ui.symbol}
           candles={candles.data || EMPTY_CANDLES}

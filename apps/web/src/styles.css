@@ -207,3 +207,22 @@ html[data-theme="light"] .rr-panel-btn.danger{color:#bc3549}
 .rr-interaction-handles{opacity:0;pointer-events:none;transition:opacity .12s ease}
 .rr-object:hover .rr-interaction-handles,.rr-object.selected .rr-interaction-handles{opacity:1;pointer-events:all}
 .rr-object:not(:hover):not(.selected) .rr-interaction-handles>*{pointer-events:none}
+
+/* Reuse the mounted chart in native fullscreen and the window-filling fallback. */
+.page.chart-page.chart-fullscreen{position:fixed;inset:0;z-index:1000;width:100%;height:100dvh;min-height:0;margin:0;padding:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bg,#0a0f16);outline:none}
+.chart-fullscreen>.page-head,.chart-fullscreen>.toolbar,.chart-fullscreen .market-panel{display:none}
+.chart-fullscreen>.chart-scanner-layout{position:relative;display:block;flex:1 1 auto;width:100%;height:100%;min-height:0;gap:0}
+.chart-fullscreen .chart-scanner-layout .chart-card,.chart-fullscreen .chart-scanner-layout .chart-host{width:100%;height:100%;min-height:0;max-height:none;border:0;border-radius:0}
+.chart-fullscreen>.inline-error{flex:0 0 auto;margin:0;padding:6px 12px}
+.chart-fullscreen-strip{position:absolute;top:0;left:0;right:70px;z-index:20;display:flex;align-items:center;gap:8px;min-height:40px;padding:4px 8px;pointer-events:none}
+.chart-fullscreen-summary{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:var(--panel,#111a26);color:var(--text,#dce5f0);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;pointer-events:auto}
+.chart-fullscreen-summary span{opacity:.7}
+.chart-fullscreen-actions{display:flex;align-items:center;gap:5px;opacity:0;pointer-events:none;transition:opacity .15s}
+.chart-fullscreen-strip:hover .chart-fullscreen-actions,.chart-fullscreen-strip:focus-within .chart-fullscreen-actions{opacity:1;pointer-events:auto}
+.chart-fullscreen-strip .icon-btn,.chart-fullscreen-strip .select{height:30px;min-width:30px;padding:4px;background:var(--panel,#111a26);color:var(--text,#dce5f0);border:1px solid var(--border,#293548);border-radius:6px}
+.chart-fullscreen-strip .icon-btn:disabled{opacity:.35;cursor:default}
+.chart-fullscreen-exit{margin-left:auto;pointer-events:auto}
+.chart-fullscreen-hint{font-size:11px;white-space:nowrap;color:var(--text,#dce5f0);background:var(--panel,#111a26);border-radius:4px;padding:4px}
+.chart-fullscreen .rr-control-panel,.chart-fullscreen .measure-draft-panel{top:48px}
+@media(hover:none){.chart-fullscreen-actions{opacity:1;pointer-events:auto}}
+@media(max-width:600px){.chart-fullscreen-strip{gap:4px}.chart-fullscreen-summary{gap:5px;font-size:10px;padding:5px}.chart-fullscreen-hint{display:none}.chart-fullscreen-actions{gap:2px}}
