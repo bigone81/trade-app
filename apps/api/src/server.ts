@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
 import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, createRulerMeasurement, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, deleteRulerMeasurement, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, listRulerMeasurements, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRulerMeasurement, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { appConfig } from './config.js';
+import { registerMarketMonitorRoutes } from './market-monitor.js';
 import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
 
 const app=Fastify({logger:{redact:['req.headers.authorization','*.key','*.secret','*.apiKey','*.apiSecret']}});
@@ -32,6 +33,7 @@ app.addHook('onRequest', async (req, reply) => {
 });
 
 app.get('/api/health',async()=>({status:'ok',liveTradingEnabled:appConfig.liveTradingEnabled}));
+registerMarketMonitorRoutes(app,db);
 app.get('/api/config',async()=>({accounts:publicAccounts(),liveTradingEnabled:appConfig.liveTradingEnabled,defaultSymbol:appConfig.defaultSymbol,defaultTimeframe:appConfig.defaultTimeframe,telegramConfigured:Boolean(process.env.TELEGRAM_BOT_TOKEN&&process.env.TELEGRAM_CHAT_ID)}));
 
 app.get('/api/market/tickers',async()=>bybit.getTickers());

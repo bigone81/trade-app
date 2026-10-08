@@ -202,3 +202,4 @@ export interface TradingOverlayLine {
   groupKey?: string;
   editTarget?: 'order_price' | 'order_trigger' | 'order_sl' | 'order_tp' | 'position_sl' | 'position_tp';
 }
+export * from './market-monitor.js';

@@ -6,7 +6,7 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "test": "node --test dist/*.test.js || true"
+    "test": "node --test dist/*.test.js"
   },
   "dependencies": {
     "@fastify/static": "^8.0.0",

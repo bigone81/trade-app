@@ -36,6 +36,7 @@ import { buildTradingOverlayLines, groupActiveOrders } from '../tradeGrouping';
 import { usePreferences } from '../preferences';
 import { useI18n } from '../i18n';
 import { useChartFullscreen } from '../useChartFullscreen';
+import { useSearchParams } from 'react-router-dom';
 
 interface MarketTicker {
   symbol: string;
@@ -79,6 +80,11 @@ const formatTurnover = (value: number) => {
 export default function ChartPage() {
   const qc = useQueryClient();
   const ui = useUi();
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const symbol = searchParams.get('symbol');
+    if (symbol && /^[A-Z0-9]{2,30}$/i.test(symbol)) useUi.getState().setSymbol(symbol);
+  }, [searchParams]);
   const { preferences, save: savePreferences } = usePreferences();
   const { t, language } = useI18n();
   const [tickerSearch, setTickerSearch] = useState('');

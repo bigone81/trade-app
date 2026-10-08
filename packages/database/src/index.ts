@@ -3,6 +3,9 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { AlertRecord, ManualLevel, RiskReward, RulerMeasurement } from '@trade/shared';
 import { isRealTradeExecution } from '@trade/shared';
+import { initializeMarketMonitor } from './market-monitor.js';
+export * from './market-monitor.js';
+export * from './telegram.js';
 
 export type SqliteDb = DatabaseSync;
 
@@ -180,6 +183,7 @@ export function openDatabase(path = process.env.DATABASE_PATH || './data/trade.s
   mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(schema);
+  initializeMarketMonitor(db);
   const columns = new Set((db.prepare('PRAGMA table_info(journal_orders)').all() as any[]).map((row:any) => String(row.name)));
   const addColumn = (name:string, definition:string) => { if (!columns.has(name)) db.exec(`ALTER TABLE journal_orders ADD COLUMN ${name} ${definition}`); };
   addColumn('exchange', "TEXT NOT NULL DEFAULT 'bybit'");

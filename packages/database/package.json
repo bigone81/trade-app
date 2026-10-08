@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test dist/*.test.js || true"
+    "test": "node --test dist/*.test.js"
   },
   "dependencies": {
     "@trade/shared": "workspace:*"

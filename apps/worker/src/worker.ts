@@ -3,7 +3,7 @@ import {
   createNotification,
   getNotificationSettings,
   listAlerts,
-  markNotificationTelegram,
+  deliverNotificationTelegram,
   openDatabase,
   recordJournalBybitExecution,
   syncJournalBybitOrder,
@@ -15,24 +15,10 @@ import { isRealTradeExecution } from '@trade/shared';
 const db=openDatabase(process.env.DATABASE_PATH || './data/trade.sqlite');
 const runtimeAccounts=discoverBybitAccounts(process.env);
 const bybit=new BybitAdapter(createEnvBybitResolver(runtimeAccounts));
-const telegramToken=process.env.TELEGRAM_BOT_TOKEN || '';
-const telegramChatId=process.env.TELEGRAM_CHAT_ID || '';
 const publicUrl=(process.env.PUBLIC_APP_URL || '').replace(/\/$/,'');
 
-async function telegram(text:string) {
-  if(!telegramToken || !telegramChatId) return false;
-  const r=await fetch(`https://api.telegram.org/bot${telegramToken}/sendMessage`,{
-    method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({chat_id:telegramChatId,text,parse_mode:'HTML',disable_web_page_preview:true})
-  });
-  if(!r.ok) throw new Error(`Telegram HTTP ${r.status}: ${await r.text()}`);
-  return true;
-}
-
 async function deliverTelegram(notification:NotificationRecord|null,text:string,enabled:boolean){
-  if(!notification || !enabled)return;
-  if(!telegramToken || !telegramChatId){markNotificationTelegram(db,notification.id,'not_configured');return;}
-  try{await telegram(text);markNotificationTelegram(db,notification.id,'sent');}
-  catch(e){const message=e instanceof Error?e.message:String(e);markNotificationTelegram(db,notification.id,'error',message);appendSystemEvent(db,{severity:'error',eventType:'telegram.error',accountId:notification.accountId,symbol:notification.symbol,message});}
+  await deliverNotificationTelegram(db,notification,text,enabled);
 }
 
 const publicWs=bybit.createPublicWebsocket();

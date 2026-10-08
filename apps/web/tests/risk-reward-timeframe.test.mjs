@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import ts from 'typescript';
 import { calculateRiskReward } from '@trade/domain';
 import * as chartTime from '../src/chartTime.ts';
-import { openDatabase, createRiskReward, listRiskRewards, updateRiskReward } from '../../../packages/database/src/index.ts';
+import { openDatabase, createRiskReward, listRiskRewards, updateRiskReward } from '../../../packages/database/dist/index.js';
 
 const source = readFileSync(new URL('../src/components/RiskRewardOverlay.tsx', import.meta.url), 'utf8');
 const chartSource = readFileSync(new URL('../src/components/TradingChart.tsx', import.meta.url), 'utf8');
