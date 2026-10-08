@@ -260,8 +260,54 @@ export function selectMarketUniverse(tickers: { symbol: string; turnover24h: num
   return [...result.values()];
 }
 
-export function formatMarketNotification(o: MarketObservation) {
+export function formatMarketNotification(o: MarketObservation, language: 'en' | 'ru' | 'uk' = 'en') {
+  const labels: Record<string, readonly [string, string, string]> = {
+    FAST_APPROACH: ['Fast approach', 'Быстрый подход', 'Швидкий підхід'],
+    BREAKOUT_SETUP: ['Breakout setup', 'Сценарий пробоя', 'Сценарій пробою'],
+    REJECTION_SETUP: ['Rejection / false break setup', 'Сценарий отбоя / ЛП', 'Сценарій відбою / ХП'],
+    FALSE_BREAKOUT: ['False breakout', 'Ложный пробой', 'Хибний пробій'],
+    BREAKOUT_CONFIRMED: ['Breakout confirmed', 'Пробой подтверждён', 'Пробій підтверджено'],
+    OBSERVATION: ['Observation', 'Наблюдение', 'Спостереження'],
+    LOW: ['Low', 'Низкий', 'Низький'], MEDIUM: ['Medium', 'Средний', 'Середній'],
+    HIGH: ['High', 'Высокий', 'Високий'], CRITICAL: ['Critical', 'Критический', 'Критичний'],
+    CONFLICT: ['Conflicting features', 'Противоречивые признаки', 'Суперечливі ознаки'],
+    manual: ['Manual level', 'Ручной уровень', 'Ручний рівень'],
+    support: ['Support', 'Поддержка', 'Підтримка'], resistance: ['Resistance', 'Сопротивление', 'Опір'],
+    mirror: ['Mirror level', 'Зеркальный уровень', 'Дзеркальний рівень'],
+    SMALL_BARS_APPROACH: ['Small bars approach', 'Подход маленькими барами', 'Підхід малими барами'],
+    STICKING_TO_LEVEL: ['Sticking to level', 'Прилипание к уровню', 'Прилипання до рівня'],
+    COMPRESSION: ['Compression', 'Поджатие', 'Підтиснення'],
+    ACCUMULATION: ['Accumulation', 'Накопление', 'Накопичення'],
+    CLOSE_NEAR_LEVEL: ['Close near level', 'Закрытие возле уровня', 'Закриття біля рівня'],
+    NEAR_RETEST: ['Near retest', 'Ближний ретест', 'Ближній ретест'],
+    NO_PULLBACK_AFTER_FALSE_BREAK: ['No pullback after false break', 'Нет отката после ложного пробоя', 'Немає відкату після хибного пробою'],
+    NO_PULLBACK_AFTER_STRONG_BAR: ['No pullback after strong bar', 'Нет отката после сильного бара', 'Немає відкату після сильного бара'],
+    CLOSE_WITHOUT_WICK_TOWARD_LEVEL: ['Close without wick toward level', 'Закрытие без тени к уровню', 'Закриття без тіні до рівня'],
+    EMPTY_SPACE_AFTER_LEVEL: ['Empty space after level', 'Свободное пространство за уровнем', 'Вільний простір за рівнем'],
+    GLOBAL_LOCAL_TREND_ALIGNED: ['Global and local trends aligned', 'Глобальный и локальный тренды совпадают', 'Глобальний і локальний тренди збігаються'],
+    ROOM_TO_NEXT_LEVEL: ['Room to next level', 'Запас до следующего уровня', 'Запас до наступного рівня'],
+    HTF_ACCUMULATION: ['Higher-timeframe accumulation', 'Накопление на старшем ТФ', 'Накопичення на старшому ТФ'],
+    LONG_NO_PULLBACK_MOVE: ['Long no-pullback move', 'Длинное безоткатное движение', 'Тривалий безвідкатний рух'],
+    BIG_BARS_APPROACH: ['Big bars approach', 'Подход большими барами', 'Підхід великими барами'],
+    ATR_EXPANSION: ['ATR expansion', 'Расширение ATR', 'Розширення ATR'],
+    HIGH_DAILY_ATR_USED: ['High daily ATR used', 'Большая часть дневного ATR пройдена', 'Більшу частину денного ATR пройдено'],
+    CLOSE_FAR_FROM_LEVEL: ['Close far from level', 'Закрытие далеко от уровня', 'Закриття далеко від рівня'],
+    FAR_RETEST: ['Far retest', 'Дальний ретест', 'Дальній ретест'],
+    NO_ACCUMULATION: ['No accumulation', 'Нет накопления', 'Немає накопичення'],
+    EXTREME: ['Price extreme', 'Ценовой экстремум', 'Ціновий екстремум'],
+    COUNTER_TREND_JERK: ['Counter-trend impulse', 'Импульс против тренда', 'Імпульс проти тренду'],
+    NO_IMPULSE_AFTER_BREAK: ['No impulse after break', 'Нет импульса после пробоя', 'Немає імпульсу після пробою'],
+    STRONG_LEVEL_AHEAD: ['Strong level ahead', 'Сильный уровень впереди', 'Сильний рівень попереду'],
+    level: ['Level', 'Уровень', 'Рівень'], price: ['Price', 'Цена', 'Ціна'],
+    distance: ['Distance', 'Расстояние', 'Відстань'], move: ['15m move', 'Движение за 15 мин', 'Рух за 15 хв'],
+    volume: ['Volume', 'Объём', 'Обсяг'], rejection: ['REJECTION / FALSE BREAK', 'ОТБОЙ / ЛП', 'ВІДБІЙ / ХП'],
+    breakout: ['BREAKOUT', 'ПРОБОЙ', 'ПРОБІЙ'], touches: ['Touches', 'Касаний', 'Дотиків'],
+    lastTouch: ['Last touch', 'Последнее касание', 'Останній дотик'], daysAgo: ['days ago', 'дн. назад', 'дн. тому'],
+    approach: ['Approach', 'Подход', 'Підхід'], priority: ['Priority', 'Приоритет', 'Пріоритет'],
+    empty: ['No confirmed features', 'Нет подтверждённых признаков', 'Немає підтверджених ознак'],
+  };
+  const t = (key: string) => labels[key]?.[language === 'ru' ? 1 : language === 'uk' ? 2 : 0] ?? key;
   const m = o.metrics; const n = (v: number | null | undefined) => v == null ? '—' : v.toFixed(2);
-  const checklist = (group: 'breakout' | 'rejection') => Object.entries(o.scores.contributions[group]).map(([key, weight]) => `✓ ${key.replaceAll('_', ' ')} +${weight}`).join('\n') || 'Нет подтверждённых признаков';
-  return `${o.symbol} · ${o.scenario ?? 'OBSERVATION'} · ${o.scores.priority}${o.scores.conflict ? ' · MIXED / CONFLICTING' : ''}\n\n${o.direction === 'UP' ? '↑' : '↓'} ${o.cluster.types.join(' + ')}\nLevel: ${o.cluster.price}\nPrice: ${o.price}\nDistance: ${n(m.distanceAtr)} ATR · ${n(m.distancePercent)}%\n15m move: ${n(m.move3)} ATR\nATR expansion: ${n(m.atrExpansion)}×\nVolume: ${n(m.volumeRatio)}×\n\nREJECTION / LP: ${o.scores.rejection}\n${checklist('rejection')}\n\nBREAKOUT: ${o.scores.breakout}\n${checklist('breakout')}\n\nTouches: ${m.touchCount}\nLast touch: ${n(m.daysSinceLastTouch)} days\nApproach: ${o.scores.approach}\nPriority: ${o.scores.priority}`;
+  const checklist = (group: 'breakout' | 'rejection') => Object.entries(o.scores.contributions[group]).map(([key, weight]) => `✓ ${t(key)} +${weight}`).join('\n') || t('empty');
+  return `${o.symbol} · ${t(o.scenario ?? 'OBSERVATION')} · ${t(o.scores.priority)}${o.scores.conflict ? ` · ${t('CONFLICT')}` : ''}\n\n${o.direction === 'UP' ? '↑' : '↓'} ${o.cluster.types.map(t).join(' + ')}\n${t('level')}: ${o.cluster.price}\n${t('price')}: ${o.price}\n${t('distance')}: ${n(m.distanceAtr)} ATR · ${n(m.distancePercent)}%\n${t('move')}: ${n(m.move3)} ATR\n${t('ATR_EXPANSION')}: ${n(m.atrExpansion)}×\n${t('volume')}: ${n(m.volumeRatio)}×\n\n${t('rejection')}: ${o.scores.rejection}\n${checklist('rejection')}\n\n${t('breakout')}: ${o.scores.breakout}\n${checklist('breakout')}\n\n${t('touches')}: ${m.touchCount ?? '—'}\n${t('lastTouch')}: ${n(m.daysSinceLastTouch)} ${t('daysAgo')}\n${t('approach')}: ${o.scores.approach}\n${t('priority')}: ${t(o.scores.priority)}`;
 }

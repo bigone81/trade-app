@@ -111,7 +111,7 @@ export class MarketScanner {
               const current = getMarketSettings(this.db), global = getNotificationSettings(this.db);
               const allowed = current.enabled && current.telegramEnabled && global.telegramMarket && priorityRank(observation.scores.priority) >= priorityRank(current.minPriority) && ['FAST_APPROACH', 'BREAKOUT_SETUP', 'REJECTION_SETUP'].includes(observation.scenario!);
               const escape = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-              await deliverNotificationTelegram(this.db, result.notification, escape(formatMarketNotification(observation)), allowed);
+              await deliverNotificationTelegram(this.db, result.notification, escape(formatMarketNotification(observation, global.language)), allowed);
               const sent = this.db.prepare('SELECT telegram_status FROM notifications WHERE id=?').get(result.notification.id) as { telegram_status: string };
               if (sent.telegram_status === 'sent') alertsSent++;
             }
@@ -140,7 +140,8 @@ export class MarketScanner {
         const next = advanceMarketState(previous, o, settings, now);
         saveMarketState(this.db, next.state);
         if (next.alert) {
-          notification = createNotification(this.db, { category: 'market', eventType: `market_${o.scenario.toLowerCase()}`, title: `${o.symbol} · ${o.scenario} · ${o.scores.priority}`, message: formatMarketNotification(o), symbol: o.symbol, actionUrl: `/?symbol=${encodeURIComponent(o.symbol)}&level=${o.cluster.price}`, payload: o, dedupeKey: `market-monitor:${id}` });
+          const message = formatMarketNotification(o, getNotificationSettings(this.db).language);
+          notification = createNotification(this.db, { category: 'market', eventType: `market_${o.scenario.toLowerCase()}`, title: message.split('\n')[0]!, message, symbol: o.symbol, actionUrl: `/?symbol=${encodeURIComponent(o.symbol)}&level=${o.cluster.price}`, payload: o, dedupeKey: `market-monitor:${id}` });
           if (notification) attachMarketNotification(this.db, id, notification.id);
         }
       }
