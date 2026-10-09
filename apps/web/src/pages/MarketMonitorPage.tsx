@@ -161,7 +161,7 @@ export default function MarketMonitorPage() {
       {feed.isPending ? <div role="status" className="card empty">{t('Loading…')}</div> : <>
         {page.rows.map(o => <details className="card mm-signal" key={o.id}>
           <summary><span className={`badge mm-priority ${o.scores.priority}`}>{o.scores.priority}</span><strong>{o.symbol}</strong><span>{o.scenario ? marketLabel(o.scenario, language) : t('Observation')}{o.scores.conflict ? ' · MIXED / CONFLICTING' : ''}</span><span>{t('Approach')} {o.scores.approach} / {t('Breakout')} {o.scores.breakout} / {t('Rejection')} {o.scores.rejection}</span><span>{t('Level')}: {num(o.cluster.price, 8)}</span><small>{date(o.createdAt)}</small></summary>
-          <Link to={marketChartUrl(o.symbol, o.cluster.price)}>{t('Open chart')} ↗</Link><Checklist observation={o}/>
+          <Link to={marketChartUrl(o.symbol, o.cluster.price)} target="_blank" rel="noopener noreferrer">{t('Open chart')} ↗</Link><Checklist observation={o}/>
         </details>)}
         {!feed.error && !page.rows.length && <div role="status" className="card empty">{t(signalsOnly ? 'No signals yet. Turn off Signals only to see all observations.' : 'No observations yet.')}</div>}
       </>}
