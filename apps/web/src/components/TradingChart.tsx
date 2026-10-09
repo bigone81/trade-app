@@ -22,7 +22,7 @@ import type {
   TradingOverlayLine,
 } from '@trade/shared';
 import RiskRewardOverlay from './RiskRewardOverlay';
-import { candleTimeAtLogical, logicalAtTime, timeframeSeconds } from '../chartTime';
+import { candleTimeAtLogical, logicalAtTime, timeToChartCoordinate, timeframeSeconds } from '../chartTime';
 import RulerOverlay from './RulerOverlay';
 import { buildTradeConnections, type TradeConnection } from '../tradeConnections';
 import { DEFAULT_BAR_SPACING, readChartBarSpacing, readChartView, resolvedTheme, usePreferences, writeChartBarSpacing, writeChartView } from '../preferences';
@@ -1434,14 +1434,12 @@ export default function TradingChart(p: Props) {
 
   const timeToCoordinate = (time: number) => {
     if (!chart) return null;
-    const direct = chart.timeScale().timeToCoordinate(time as UTCTimestamp);
-    if (direct !== null) return direct;
-    const logical = logicalAtTime(
+    return timeToChartCoordinate(
+      chart.timeScale(),
       timelineCandlesRef.current,
       time,
       timeframeSeconds(p.timeframe),
     );
-    return logical === null ? null : (chart.timeScale() as any).logicalToCoordinate(logical) as number | null;
   };
 
   const priceScaleWidth = chart ? Number((chart.priceScale('right') as any).width?.() || 64) : 64;

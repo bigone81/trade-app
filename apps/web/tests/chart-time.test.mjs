@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { candleStep, candleTimeAtLogical, logicalAtTime, timeframeSeconds } from '../src/chartTime.ts';
+import { candleStep, candleTimeAtLogical, logicalAtTime, timeframeSeconds, coordinateAtLogical, logicalAtCoordinate, timeToChartCoordinate, chartCoordinateToTime } from '../src/chartTime.ts';
+import { chartScaleCoordinates } from './helpers/chart-scale.mjs';
 
 const candles = [0, 3600, 7200, 14400, 18000].map(time => ({ time }));
 
@@ -38,4 +39,35 @@ test('all supported timeframes preserve second-precision endpoints on round trip
       assert.equal(candleTimeAtLogical(bars, logicalAtTime(bars, time, step), step), time);
     }
   }
+});
+
+test('fractional positions interpolate actual Lightweight Charts integer centres in both directions', () => {
+  const state = { spacing: 3, offset: 127, count: 1000 };
+  const scale = chartScaleCoordinates(state);
+  assert.equal(scale.logicalToCoordinate(1.5), 0, 'reproduce the library behaviour that collapsed RR');
+  for (const spacing of [0.5, 3, 17]) {
+    state.spacing = spacing;
+    for (const logical of [-2500.7, -0.5, 0, 1.5, 345.123, 999, 1500.7]) {
+      const x = coordinateAtLogical(scale, logical);
+      assert.ok(Math.abs(x - (state.offset + logical * spacing)) < 1e-8);
+      assert.ok(Math.abs(logicalAtCoordinate(scale, x) - logical) < 1e-8);
+    }
+  }
+});
+
+test('missing/invalid coordinates never become a left-edge coordinate; zero is valid', () => {
+  for (const invalid of [null, undefined, NaN, Infinity]) {
+    const scale = { logicalToCoordinate: () => invalid, coordinateToLogical: () => invalid, timeToIndex: () => invalid };
+    assert.equal(coordinateAtLogical(scale, 1.5), null);
+    assert.equal(logicalAtCoordinate(scale, 100), null);
+    assert.equal(timeToChartCoordinate(scale, candles, 1800, 3600), null);
+    assert.equal(chartCoordinateToTime(scale, candles, 100, 3600), null);
+  }
+  const scale = chartScaleCoordinates({ spacing: 10, offset: 0, count: 5 });
+  scale.timeToIndex = () => 0;
+  assert.equal(timeToChartCoordinate(scale, candles, 0, 3600), 0);
+  assert.equal(timeToChartCoordinate(scale, [], 0, 3600), null);
+  assert.equal(chartCoordinateToTime(scale, [], 0, 3600), null);
+  assert.equal(timeToChartCoordinate(scale, candles, NaN, 3600), null);
+  assert.equal(chartCoordinateToTime(scale, candles, Infinity, 3600), null);
 });

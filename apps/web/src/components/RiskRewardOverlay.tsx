@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import type { IChartApi, ISeriesApi, Logical, UTCTimestamp } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi } from 'lightweight-charts';
 import type { Candle, RiskReward } from '@trade/shared';
 import { calculateRiskReward } from '@trade/domain';
 import { useI18n } from '../i18n';
-import { candleTimeAtLogical, logicalAtTime, timeframeSeconds } from '../chartTime';
+import { chartCoordinateToTime, timeToChartCoordinate, timeframeSeconds } from '../chartTime';
 
 type DragKind = 'entry' | 'stop' | 'target' | 'startTime' | 'endTime' | 'move';
 
@@ -39,7 +39,7 @@ export default function RiskRewardOverlay({
   onDelete,
 }: Props) {
   const { language } = useI18n();
-  const [version, setVersion] = useState(0);
+  const [, setVersion] = useState(0);
   // Presentation mode is local to this browser. Price and time geometry remain
   // in the original RR record and are never changed when switching modes.
   const [displayModes, setDisplayModes] = useState<Record<number, 'box' | 'lines'>>({});
@@ -70,16 +70,24 @@ export default function RiskRewardOverlay({
 
   const timeToX = (time: number) => {
     if (!chart) return null;
-    const direct = chart.timeScale().timeToCoordinate(time as UTCTimestamp);
-    if (direct !== null) return direct;
-    const logical = logicalAtTime(candles, time, step);
-    return logical === null ? null : chart.timeScale().logicalToCoordinate(logical as Logical);
+    return timeToChartCoordinate(chart.timeScale(), candles, time, step);
   };
 
   const xToTime = (x: number) => {
     if (!chart) return null;
-    const logical = chart.timeScale().coordinateToLogical(x);
-    return logical === null ? null : candleTimeAtLogical(candles, logical, step);
+    return chartCoordinateToTime(chart.timeScale(), candles, x, step);
+  };
+
+  const geometry = (r: RiskReward) => {
+    if (!series) return null;
+    const x1 = timeToX(r.startTime);
+    const x2 = timeToX(r.endTime);
+    const entryY = series.priceToCoordinate(r.entry);
+    const stopY = series.priceToCoordinate(r.stop);
+    const targetY = series.priceToCoordinate(r.target);
+    if (x1 === null || x2 === null || entryY === null || stopY === null || targetY === null
+      || ![x1, x2, entryY, stopY, targetY].every(Number.isFinite)) return null;
+    return { x1, x2, entryY, stopY, targetY };
   };
 
   useEffect(() => {
@@ -111,7 +119,7 @@ export default function RiskRewardOverlay({
 
       if (drag.kind === 'entry' || drag.kind === 'stop' || drag.kind === 'target') {
         const price = series.coordinateToPrice(y);
-        if (price && price > 0) next = { ...next, [drag.kind]: price };
+        if (price !== null && Number.isFinite(price) && price > 0) next = { ...next, [drag.kind]: price };
       } else if (drag.kind === 'startTime' || drag.kind === 'endTime') {
         const t = xToTime(x);
         if (typeof t === 'number') {
@@ -121,7 +129,9 @@ export default function RiskRewardOverlay({
       } else {
         const currentPrice = series.coordinateToPrice(y);
         const currentTime = xToTime(x);
-        if (currentPrice !== null && drag.startPrice !== null && currentTime !== null && drag.startTime !== null) {
+        if (currentPrice !== null && Number.isFinite(currentPrice)
+          && drag.startPrice !== null && Number.isFinite(drag.startPrice)
+          && currentTime !== null && drag.startTime !== null) {
           const priceDelta = currentPrice - drag.startPrice;
           const timeDelta = currentTime - drag.startTime;
           next = {
@@ -171,8 +181,27 @@ export default function RiskRewardOverlay({
 
   const display = useMemo(
     () => items.map((item) => (draft?.id === item.id ? draft : item)),
-    [items, draft, version],
+    [items, draft],
   );
+
+  useEffect(() => {
+    if (!chart || !series || !display.length) return;
+    // Price autoscale and axis drags need not emit a time-range/crosshair event.
+    // Observe the projected geometry after chart frames, and render only when it
+    // changes. Rectangles, levels and handles all use this same projection.
+    let previous = JSON.stringify(display.map(geometry));
+    let frame: number;
+    const refresh = () => {
+      const next = JSON.stringify(display.map(geometry));
+      if (next !== previous) {
+        previous = next;
+        setVersion((value) => value + 1);
+      }
+      frame = window.requestAnimationFrame(refresh);
+    };
+    frame = window.requestAnimationFrame(refresh);
+    return () => window.cancelAnimationFrame(frame);
+  }, [chart, series, candles, step, display]);
 
   if (!chart || !series || !host) return null;
 
@@ -212,12 +241,9 @@ export default function RiskRewardOverlay({
     <>
       <svg className="chart-overlay rr-overlay" width={host.clientWidth} height={host.clientHeight}>
         {display.map((r) => {
-          const x1 = timeToX(r.startTime);
-          const x2 = timeToX(r.endTime);
-          const entryY = series.priceToCoordinate(r.entry);
-          const stopY = series.priceToCoordinate(r.stop);
-          const targetY = series.priceToCoordinate(r.target);
-          if (x1 === null || x2 === null || entryY === null || stopY === null || targetY === null) return null;
+          const projected = geometry(r);
+          if (!projected) return null;
+          const { x1, x2, entryY, stopY, targetY } = projected;
 
           const left = Math.min(x1, x2);
           const right = Math.max(x1, x2);
