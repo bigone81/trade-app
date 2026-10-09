@@ -6,7 +6,7 @@
     "dev": "tsx watch src/worker.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/worker.js",
-    "test": "node --test dist/*.test.js || true"
+    "test": "node --test dist/*.test.js"
   },
   "dependencies": {
     "@trade/database": "workspace:*",

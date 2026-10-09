@@ -11,6 +11,7 @@ import {
 } from '@trade/database';
 import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
 import { isRealTradeExecution } from '@trade/shared';
+import { withWorkerChartLink } from './telegram-message.js';
 
 const db=openDatabase(process.env.DATABASE_PATH || './data/trade.sqlite');
 const runtimeAccounts=discoverBybitAccounts(process.env);
@@ -18,7 +19,8 @@ const bybit=new BybitAdapter(createEnvBybitResolver(runtimeAccounts));
 const publicUrl=(process.env.PUBLIC_APP_URL || '').replace(/\/$/,'');
 
 async function deliverTelegram(notification:NotificationRecord|null,text:string,enabled:boolean){
-  await deliverNotificationTelegram(db,notification,text,enabled);
+  const message=withWorkerChartLink(notification,text,getNotificationSettings(db).language,publicUrl);
+  await deliverNotificationTelegram(db,notification,message,enabled);
 }
 
 const publicWs=bybit.createPublicWebsocket();
@@ -89,8 +91,7 @@ async function onPrice(symbol:string,price:number){
       const title=settings.language==='uk'?`${symbol} · рівень досягнуто`:settings.language==='ru'?`${symbol} · уровень достигнут`:`${symbol} · level reached`;
       const message=settings.language==='uk'?`${symbol} досяг рівня ${a.price}. Поточна ціна ${price}.`:settings.language==='ru'?`${symbol} достиг уровня ${a.price}. Текущая цена ${price}.`:`${symbol} reached level ${a.price}. Current price ${price}.`;
       const n=createNotification(db,{category:'market',eventType:'alert.triggered',severity:'info',title,message,symbol,actionUrl:`/?symbol=${encodeURIComponent(symbol)}`,payload:{alertId:a.id,level:a.price,price,sourceType:a.sourceType}});
-      const link=publicUrl?`\n\n${publicUrl}/?symbol=${encodeURIComponent(symbol)}`:'';
-      const telegramText=settings.language==='uk'?`🔔 <b>${symbol}</b>\n\nРівень досягнуто: <b>${a.price}</b>\nЦіна: ${price}${link}`:settings.language==='ru'?`🔔 <b>${symbol}</b>\n\nУровень достигнут: <b>${a.price}</b>\nЦена: ${price}${link}`:`🔔 <b>${symbol}</b>\n\nLevel reached: <b>${a.price}</b>\nPrice: ${price}${link}`;
+      const telegramText=settings.language==='uk'?`🔔 <b>${symbol}</b>\n\nРівень досягнуто: <b>${a.price}</b>\nЦіна: ${price}`:settings.language==='ru'?`🔔 <b>${symbol}</b>\n\nУровень достигнут: <b>${a.price}</b>\nЦена: ${price}`:`🔔 <b>${symbol}</b>\n\nLevel reached: <b>${a.price}</b>\nPrice: ${price}`;
       void deliverTelegram(n,telegramText,a.telegramEnabled&&settings.telegramMarket);
     }
   }
