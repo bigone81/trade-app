@@ -6,6 +6,7 @@ import { deleteMarketWatchSymbol, getMarketSettings, getMarketSignal, getMarketS
 const symbolSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,26}USDT$/);
 const prioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
 const sortSchema = z.enum(['newest', 'oldest', 'priority_desc', 'priority_asc']);
+const paginatedSymbolSchema = z.string().trim().toUpperCase().regex(/^[A-Z0-9]{1,30}$/);
 const utcDateSchema = z.string().refine(value => value.endsWith('Z') && !Number.isNaN(Date.parse(value)), 'Expected a UTC ISO date');
 const legacySignalsQuery = z.object({
   symbol: symbolSchema.optional(), before: z.coerce.number().int().positive().optional(),
@@ -13,7 +14,7 @@ const legacySignalsQuery = z.object({
 }).strict();
 const paginatedSignalsQuery = z.object({
   page: z.coerce.number().int().min(1), pageSize: z.coerce.number().int().min(1).max(100).default(50),
-  symbol: symbolSchema.optional(), priority: prioritySchema.optional(), signalsOnly: z.enum(['true', 'false']).default('false'),
+  symbol: paginatedSymbolSchema.optional(), priority: prioritySchema.optional(), signalsOnly: z.enum(['true', 'false']).default('false'),
   dateFromUtc: utcDateSchema.optional(), dateToUtcExclusive: utcDateSchema.optional(), sort: sortSchema.default('newest'),
 }).strict().superRefine((value, context) => {
   if (value.dateFromUtc && value.dateToUtcExclusive && Date.parse(value.dateFromUtc) >= Date.parse(value.dateToUtcExclusive)) {
@@ -53,6 +54,7 @@ export function registerMarketMonitorRoutes(app: FastifyInstance, db: SqliteDb) 
       if (!result.success) return reply.code(400).send({ error: 'Invalid paginated signal filters' });
       return listMarketSignalPage(db, {
         ...result.data,
+        symbolSearch: result.data.symbol,
         signalsOnly: result.data.signalsOnly === 'true',
         dateFromUtc: result.data.dateFromUtc ? sqliteUtcDate(result.data.dateFromUtc) : undefined,
         dateToUtcExclusive: result.data.dateToUtcExclusive ? sqliteUtcDate(result.data.dateToUtcExclusive) : undefined,

@@ -105,7 +105,7 @@ export default function MarketMonitorPage() {
   const [tab, setTab] = useState<'live' | 'feed' | 'settings'>('live');
   const [selected, setSelected] = useState<MarketObservation | null>(null);
   const [signalsOnly, setSignalsOnly] = useState(true), [filter, setFilter] = useState('');
-  const [priority, setPriority] = useState<MarketPriority | ''>('');
+  const [symbolSearch, setSymbolSearch] = useState(''), [priority, setPriority] = useState<MarketPriority | ''>('');
   const [sort, setSort] = useState<MarketSignalSort>('newest');
   const [dateFrom, setDateFrom] = useState(''), [dateTo, setDateTo] = useState('');
   const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(50);
@@ -114,9 +114,10 @@ export default function MarketMonitorPage() {
   const settings = useQuery<MarketMonitorSettings>({ queryKey: ['mm-settings'], queryFn: () => api(`${base}/settings`) });
   const invalidDateRange = Boolean(dateFrom && dateTo && dateFrom > dateTo);
   const feed = useQuery<MarketSignalPage>({
-    queryKey: ['mm-feed', page, pageSize, priority, signalsOnly, dateFrom, dateTo, sort],
+    queryKey: ['mm-feed', page, pageSize, symbolSearch, priority, signalsOnly, dateFrom, dateTo, sort],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), signalsOnly: String(signalsOnly), sort });
+      if (symbolSearch) params.set('symbol', symbolSearch);
       if (priority) params.set('priority', priority);
       if (dateFrom) params.set('dateFromUtc', marketLocalDateUtcIso(dateFrom));
       if (dateTo) params.set('dateToUtcExclusive', marketLocalDateUtcIso(dateTo, true));
@@ -177,6 +178,7 @@ export default function MarketMonitorPage() {
     </section>
     <section id="mm-panel-feed" role="tabpanel" aria-labelledby="mm-tab-feed" hidden={tab !== 'feed'}>
        <div className="mm-feed-controls">
+         <label className="field mm-symbol-search"><span>{t('Ticker')}</span><input className="input" type="search" inputMode="search" autoComplete="off" value={symbolSearch} placeholder="BTCUSDT" aria-label={t('Ticker')} onChange={e => { setSymbolSearch(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '')); setPage(1); }}/></label>
          <label className="setting-check"><input type="checkbox" checked={signalsOnly} onChange={e => { setSignalsOnly(e.target.checked); setPage(1); }}/>{t('Signals only')}</label>
          <button className="btn ghost" disabled={page === 1 && sort === 'newest'} onClick={() => { setSort('newest'); setPage(1); }}>{t('Latest')}</button>
          <label className="field"><span>{t('Priority')}</span><select className="select" value={priority} onChange={e => { setPriority(e.target.value as MarketPriority | ''); setPage(1); }}><option value="">{t('All')}</option>{(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map(value => <option key={value} value={value}>{value}</option>)}</select></label>

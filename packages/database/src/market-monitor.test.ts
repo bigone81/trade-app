@@ -5,7 +5,7 @@ import type { MarketObservation, MarketPriority } from '@trade/shared';
 
 function observation(priority: MarketPriority, index: number, scenario: MarketObservation['scenario'] = 'BREAKOUT_SETUP'): MarketObservation {
   return {
-    symbol: 'BTCUSDT', barTime: 1_000 + index, price: 100 + index, direction: 'UP',
+    symbol: index === 3 ? 'ETHUSDT' : 'BTCUSDT', barTime: 1_000 + index, price: 100 + index, direction: 'UP',
     cluster: { key: `level-${index}`, price: 100 + index, types: [], members: [], autoTouches: 0, autoStrength: 0 },
     features: [], metrics: {}, scores: { approach: index, breakout: index, rejection: index, priority, conflict: false, contributions: { approach: {}, breakout: {}, rejection: {} } }, scenario,
   };
@@ -48,6 +48,8 @@ test('market signal pages apply identical filters to count and rows with stable 
     seedSignals(db);
     const priorityPage = listMarketSignalPage(db, { page: 1, pageSize: 10, priority: 'HIGH', sort: 'newest' });
     assert.equal(priorityPage.total, 1); assert.equal(priorityPage.totalPages, 1); assert.equal(priorityPage.items[0]?.scores.priority, 'HIGH');
+    const tickerPage = listMarketSignalPage(db, { page: 1, pageSize: 10, symbolSearch: 'ETH', sort: 'newest' });
+    assert.equal(tickerPage.total, 1); assert.equal(tickerPage.items[0]?.symbol, 'ETHUSDT');
     const important = listMarketSignalPage(db, { page: 1, pageSize: 10, signalsOnly: true, sort: 'priority_desc' });
     assert.deepEqual(important.items.map(row => row.scores.priority), ['CRITICAL', 'HIGH', 'LOW']);
     const old = listMarketSignalPage(db, { page: 1, pageSize: 10, sort: 'oldest' });

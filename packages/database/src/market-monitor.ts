@@ -85,7 +85,7 @@ export function listMarketSignals(db: SqliteDb, filters: { symbol?: string; befo
 }
 export type MarketSignalSort = 'newest' | 'oldest' | 'priority_desc' | 'priority_asc';
 export interface MarketSignalPageFilters {
-  symbol?: string;
+  symbolSearch?: string;
   page: number;
   pageSize: number;
   priority?: MarketSignal['scores']['priority'];
@@ -111,7 +111,7 @@ const pageOrderSql: Record<MarketSignalSort, string> = {
 function marketSignalPageConditions(filters: MarketSignalPageFilters) {
   const conditions: string[] = [];
   const values: (string | number)[] = [];
-  if (filters.symbol) { conditions.push('symbol=?'); values.push(filters.symbol); }
+  if (filters.symbolSearch) { conditions.push('symbol LIKE ?'); values.push(`${filters.symbolSearch}%`); }
   if (filters.priority) { conditions.push('priority=?'); values.push(filters.priority); }
   if (filters.signalsOnly) conditions.push('signal_type IS NOT NULL');
   if (filters.dateFromUtc) { conditions.push('created_at>=?'); values.push(filters.dateFromUtc); }
