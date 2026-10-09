@@ -2,21 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createManualLevel, getMarketClusters, getMarketSettings, getMarketStates, getMarketSymbols, listMarketSignals, listNotifications, openDatabase, saveMarketSettings, saveMarketWatchSymbol } from '@trade/database';
 import { detectLevels } from '@trade/domain';
-import type { Candle } from '@trade/shared';
-import { closedBarTime, MarketScanner, nextScanTime, RequestQueue, type PublicMarketData } from './scanner.js';
+import type { Candle, MarketMonitorStatus } from '@trade/shared';
+import { closedBarTime, MarketScanner as BaseMarketScanner, nextScanTime, RequestQueue, type PublicMarketData } from './scanner.js';
+import { TestClock } from './test-clock.js';
+
+class MarketScanner extends BaseMarketScanner {
+  constructor(db: ReturnType<typeof openDatabase>, source: PublicMarketData) {
+    super(db, source, '', new RequestQueue(2, { clock: new TestClock(), random: () => 0, log: () => {} }));
+  }
+  override async scan(now: number, progress: (patch: Partial<MarketMonitorStatus>) => void) {
+    const clock = this.queue.clock as TestClock; clock.time = now;
+    return clock.run(super.scan(now, progress));
+  }
+}
 
 test('schedule analyzes each closed M5 bar only after the configured delay', () => {
   const boundary = Date.UTC(2026, 0, 1, 12);
   assert.equal(closedBarTime(boundary + 4999, 5), boundary / 1000 - 600);
   assert.equal(closedBarTime(boundary + 5000, 5), boundary / 1000 - 300);
   assert.equal(nextScanTime(boundary + 5000, 5), boundary + 305000);
-});
-test('request queue bounds concurrency even when requests reject', async () => {
-  const queue = new RequestQueue(2, 0); let active = 0, max = 0;
-  await Promise.allSettled(Array.from({ length: 8 }, (_, i) => queue.run(async () => {
-    max = Math.max(max, ++active); await new Promise(resolve => setTimeout(resolve, 2)); active--; if (i === 3) throw new Error('test');
-  })));
-  assert.equal(max, 2); assert.equal(queue.requests, 8); assert.equal(active, 0);
 });
 test('scanner shares chart levels, persists silent observations, caches HTF and deduplicates restart', async () => {
   const db = openDatabase(':memory:');

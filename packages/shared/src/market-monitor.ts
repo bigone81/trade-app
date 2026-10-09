@@ -21,7 +21,7 @@ export const marketNumericDefaults = {
   relativeStrengthThreshold: 0.8, noPullbackMoveAtr: 1.5, dailyAtrUsedThreshold: 0.8,
   roomToNextLevelAtr: 2, postBreakBars: 3, postBreakImpulseAtr: 0.5,
   strongLevelTouches: 3, strongLevelStrength: 3,
-  scanDelaySeconds: 5, concurrency: 3,
+  scanDelaySeconds: 5, concurrency: 2,
 };
 export type MarketNumericKey = keyof typeof marketNumericDefaults;
 export type MarketMonitorSettings = typeof marketNumericDefaults & {
@@ -86,5 +86,7 @@ export interface MarketMonitorStatus {
   heartbeatAt: string | null; lastScan: string | null; nextScan: string | null;
   monitoring: number; auto: number; watchlist: number; manual: number;
   symbolsScanned: number; requestsMade: number; cycleDurationMs: number; errors: number; signalsDetected: number; alertsSent: number;
+  rateLimitHits?: number; retryCount?: number; backoffMs?: number; effectiveRps?: number;
+  requestsSucceeded?: number; requestsFailed?: number;
   error: string | null;
 }

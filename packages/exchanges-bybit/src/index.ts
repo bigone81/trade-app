@@ -4,6 +4,9 @@ import type { ExchangeAccountResolver, ExchangeAccountRuntime } from '@trade/exc
 
 const num=(v:unknown)=>{const n=Number(v);return Number.isFinite(n)?n:0};
 const nullable=(v:unknown)=>v===undefined||v===null||v===''?null:num(v);
+
+/** Dedicated credential-free Market Worker client; trading clients retain their existing options. */
+export const createMarketReadClient = () => new RestClientV5({ parseAPIRateLimits: true }, { timeout: 15_000 });
 const decimals=(value:string)=>{const normalized=value.replace(/0+$/,'');const i=normalized.indexOf('.');return i<0?0:normalized.length-i-1;};
 const align=(value:number,stepText:string,mode:'round'|'floor'='round')=>{
   const step=Number(stepText);if(!Number.isFinite(step)||step<=0)return String(value);

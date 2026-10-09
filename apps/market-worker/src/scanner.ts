@@ -2,6 +2,8 @@ import { detectLevels, analyzeMarket, marketAtr, clusterLevels, advanceMarketSta
 import { attachMarketNotification, createNotification, deliverNotificationTelegram, getManualLevelSymbols, getMarketClusters, getMarketSettings, getMarketStates, getMarketSymbols, getMarketWatchlist, getNotificationSettings, insertMarketObservation, listManualLevels, pruneMarketUniverse, saveMarketState, saveMarketSymbol, type SqliteDb } from '@trade/database';
 import type { Candle, MarketMonitorSettings, MarketMonitorStatus, MarketObservation, MarketSymbol, MonitorLevel } from '@trade/shared';
 import { formatTelegramMarketNotification } from './telegram-message.js';
+import { RequestQueue, ScanDeferredError } from './request-queue.js';
+export { RequestQueue } from './request-queue.js';
 
 export interface PublicMarketData {
   getCandles(symbol: string, interval: string, limit: number): Promise<Candle[]>;
@@ -11,37 +13,30 @@ export interface PublicMarketData {
 export const closedBarTime = (now: number, delaySeconds: number) => Math.floor((now - delaySeconds * 1000) / 300_000) * 300 - 300;
 export const nextScanTime = (now: number, delaySeconds: number) => (Math.floor((now - delaySeconds * 1000) / 300_000) + 1) * 300_000 + delaySeconds * 1000;
 
-/** A shared request queue bounds concurrency and spaces starts across all symbols. */
-export class RequestQueue {
-  private active = 0;
-  private waiters: (() => void)[] = [];
-  private nextStart = 0;
-  requests = 0;
-  constructor(public concurrency = 3, private spacingMs = 100) {}
-  async run<T>(request: () => Promise<T>): Promise<T> {
-    if (this.active >= this.concurrency) await new Promise<void>(resolve => this.waiters.push(resolve)); else this.active++;
-    try {
-      const start = Math.max(Date.now(), this.nextStart); this.nextStart = start + this.spacingMs;
-      if (start > Date.now()) await new Promise(resolve => setTimeout(resolve, start - Date.now()));
-      this.requests++; return await request();
-    } finally { const next = this.waiters.shift(); if (next) next(); else this.active--; }
-  }
-}
 export class MarketScanner {
-  readonly queue = new RequestQueue();
   private candles = new Map<string, { bucket: number; data: Candle[] }>();
+  private inFlight = new Map<string, Promise<Candle[]>>();
+  private scanning = false;
   private universe: ReturnType<typeof selectMarketUniverse> = [];
   private universeAt = 0;
   private universeSignature = '';
-  constructor(private db: SqliteDb, private data: PublicMarketData, private publicAppUrl = process.env.PUBLIC_APP_URL ?? '') {}
+  constructor(private db: SqliteDb, private data: PublicMarketData, private publicAppUrl = process.env.PUBLIC_APP_URL ?? '', readonly queue = new RequestQueue()) {}
 
   private async cachedCandles(symbol: string, interval: string, limit: number, periodSeconds: number, now: number) {
+    this.queue.assertCurrent();
     const key = `${symbol}:${interval}:${limit}`, bucket = Math.floor(now / 1000 / periodSeconds);
     const cached = this.candles.get(key);
     if (cached?.bucket === bucket) return cached.data;
-    const data = await this.queue.run(() => this.data.getCandles(symbol, interval, limit));
-    if (data.some(c => ![c.time, c.open, c.high, c.low, c.close, c.volume ?? 0].every(Number.isFinite) || c.close <= 0 || c.low <= 0 || c.high < c.low)) throw new Error(`Invalid ${interval} candles for ${symbol}`);
-    this.candles.set(key, { bucket, data }); return data;
+    const flightKey = `${key}:${bucket}`;
+    const pending = this.inFlight.get(flightKey);
+    if (pending) return pending;
+    const request = (async () => {
+      const data = await this.queue.run(() => this.data.getCandles(symbol, interval, limit), `kline:${interval}:${limit}`);
+      if (data.some(c => ![c.time, c.open, c.high, c.low, c.close, c.volume ?? 0].every(Number.isFinite) || c.close <= 0 || c.low <= 0 || c.high < c.low)) throw new Error(`Invalid ${interval} candles for ${symbol}`);
+      this.candles.set(key, { bucket, data }); return data;
+    })();
+    this.inFlight.set(flightKey, request);
+    try { return await request; } finally { this.inFlight.delete(flightKey); }
   }
   private async refreshUniverse(s: MarketMonitorSettings, now: number) {
     const watchlist = getMarketWatchlist(this.db).filter(x => x.enabled).map(x => x.symbol), manual = getManualLevelSymbols(this.db);
@@ -50,13 +45,13 @@ export class MarketScanner {
     const eligible = new Set<string>(); let cursor: string | undefined;
     const cursors = new Set<string>();
     do {
-      const page = await this.queue.run(() => this.data.getInstruments(cursor));
+      const page = await this.queue.run(() => this.data.getInstruments(cursor), 'instruments');
       page.list.filter(x => x.status === 'Trading' && x.contractType === 'LinearPerpetual' && x.quoteCoin === 'USDT' && x.settleCoin === 'USDT').forEach(x => eligible.add(x.symbol));
       cursor = page.nextPageCursor || undefined;
       if (cursor && cursors.has(cursor)) throw new Error('Repeated Bybit instruments cursor');
       if (cursor) cursors.add(cursor);
     } while (cursor);
-    const tickers = await this.queue.run(() => this.data.getTickers());
+    const tickers = await this.queue.run(() => this.data.getTickers(), 'tickers');
     const previousAuto = new Set(getMarketSymbols(this.db).filter(x => x.sources.includes('auto')).map(x => x.symbol));
     this.universe = selectMarketUniverse(tickers, eligible, previousAuto, watchlist, manual, s);
     this.universeAt = now; this.universeSignature = signature;
@@ -67,70 +62,106 @@ export class MarketScanner {
     for (const key of this.candles.keys()) if (!symbols.has(key.split(':')[0]!) && !key.startsWith('BTCUSDT:')) this.candles.delete(key);
   }
   async scan(now: number, onProgress: (patch: Partial<MarketMonitorStatus>) => void) {
-    const start = Date.now(), beforeRequests = this.queue.requests, settings = getMarketSettings(this.db);
+    if (this.scanning) throw new Error('Market scan already running');
+    this.scanning = true;
+    try { await this.scanCycle(now, onProgress); }
+    finally { await this.queue.drain(); this.scanning = false; }
+  }
+  private async scanCycle(now: number, onProgress: (patch: Partial<MarketMonitorStatus>) => void) {
+    const start = this.queue.clock.now(), settings = getMarketSettings(this.db);
+    // Stop before the next M5 becomes current, with a maximum four-minute cycle budget.
+    this.queue.beginCycle(Math.min(start + 240_000, nextScanTime(now, settings.scanDelaySeconds) - settings.scanDelaySeconds * 1000));
     this.queue.concurrency = settings.concurrency;
     let symbolsScanned = 0, errors = 0, signalsDetected = 0, alertsSent = 0;
-    const progress = () => onProgress({ symbolsScanned, errors, signalsDetected, alertsSent, requestsMade: this.queue.requests - beforeRequests, cycleDurationMs: Date.now() - start });
-    await this.refreshUniverse(settings, now);
-    onProgress({ monitoring: this.universe.length, auto: this.universe.filter(x => x.sources.includes('auto')).length, watchlist: this.universe.filter(x => x.sources.includes('watchlist')).length, manual: this.universe.filter(x => x.sources.includes('manual')).length });
-    const barTime = closedBarTime(now, settings.scanDelaySeconds);
-    const closed = (candles: Candle[], period: number) => candles.filter(x => x.time + period <= barTime + 300);
-    const btc = closed(await this.cachedCandles('BTCUSDT', '5', 310, 300, now), 300);
-    const existing = new Map(getMarketSymbols(this.db).map(x => [x.symbol, x]));
-    let index = 0;
-    const runSymbol = async () => {
-      while (index < this.universe.length) {
-        if (!getMarketSettings(this.db).enabled) return;
-        const row = this.universe[index++]!;
-        try {
-          // Auto membership includes the exit threshold; watchlist is an explicit override.
-          const includeAutoLevels = row.sources.includes('auto') || row.sources.includes('watchlist') || row.turnover >= settings.minTurnover;
-          const [rawM5, rawH1, rawH4, historicalDaily, chartDaily] = await Promise.all([
-            this.cachedCandles(row.symbol, '5', 310, 300, now),
-            this.cachedCandles(row.symbol, '60', 80, 3600, now),
-            this.cachedCandles(row.symbol, '240', 80, 14400, now),
-            this.cachedCandles(row.symbol, 'D', 400, 86400, now),
-            // The chart includes the open D1 candle. Refresh exactly its 30-bar input once per M5 scan.
-            includeAutoLevels ? this.cachedCandles(row.symbol, 'D', 30, 300, now) : Promise.resolve([]),
-          ]);
-          const m5 = closed(rawM5, 300), h1 = closed(rawH1, 3600), h4 = closed(rawH4, 14400), daily = closed(historicalDaily, 86400);
-          if (m5.at(-1)?.time !== barTime || m5.length < 30 || m5.slice(-30).some((x, i, a) => i > 0 && x.time - a[i - 1]!.time !== 300)) throw new Error('Missing or stale closed M5 candles');
-          const atr = marketAtr(m5);
-          if (atr <= 0) throw new Error('Insufficient ATR history');
-          const auto = includeAutoLevels ? detectLevels(chartDaily) : { limitLevels: [], mirrorLevels: [] };
-          const levels: MonitorLevel[] = [...auto.limitLevels, ...auto.mirrorLevels].map(x => ({ ...x, id: `auto:${x.type}:${x.price}` }));
-          levels.push(...listManualLevels(this.db, row.symbol).map(x => ({ id: `manual:${x.id}`, price: x.price, type: 'manual' as const, touches: 0, strength: 0, dates: [] })));
-          const clusters = clusterLevels(levels, atr, settings.levelClusterAtr, getMarketClusters(this.db, row.symbol));
-          const observations = analyzeMarket({ symbol: row.symbol, m5, h1, h4, daily, btc, clusters, settings });
-          // Reset even clusters which are no longer the nearest level ahead.
-          for (const state of getMarketStates(this.db, row.symbol)) {
-            const level = clusters.find(x => x.key === state.levelKey);
-            if (!level || Math.abs(m5.at(-1)!.close - level.price) / atr > settings.resetDistanceAtr) saveMarketState(this.db, { ...state, state: 'RESET' });
-          }
-          for (const observation of observations) {
-            const result = this.persist(observation, settings, now);
-            if (result.saved && observation.scenario) signalsDetected++;
-            if (result.notification) {
-              const current = getMarketSettings(this.db), global = getNotificationSettings(this.db);
-              const allowed = current.enabled && current.telegramEnabled && global.telegramMarket && priorityRank(observation.scores.priority) >= priorityRank(current.minPriority) && ['FAST_APPROACH', 'BREAKOUT_SETUP', 'REJECTION_SETUP'].includes(observation.scenario!);
-              await deliverNotificationTelegram(this.db, result.notification, formatTelegramMarketNotification(observation, global.language, this.publicAppUrl), allowed);
-              const sent = this.db.prepare('SELECT telegram_status FROM notifications WHERE id=?').get(result.notification.id) as { telegram_status: string };
-              if (sent.telegram_status === 'sent') alertsSent++;
-            }
-          }
-          const best = [...observations].sort((a, b) => Number(!!b.scenario) - Number(!!a.scenario) || Math.max(b.scores.approach, b.scores.breakout, b.scores.rejection) - Math.max(a.scores.approach, a.scores.breakout, a.scores.rejection))[0] ?? null;
-          const signal = observations.find(x => x.scenario);
-          const symbol: MarketSymbol = { ...row, observation: best, error: null, scannedAt: new Date(now).toISOString(), lastSignal: signal ? { scenario: signal.scenario!, at: new Date((barTime + 300) * 1000).toISOString() } : existing.get(row.symbol)?.lastSignal ?? null };
-          saveMarketSymbol(this.db, symbol, clusters); symbolsScanned++;
-        } catch (error) {
-          errors++;
-          saveMarketSymbol(this.db, { ...row, observation: existing.get(row.symbol)?.observation ?? null, lastSignal: existing.get(row.symbol)?.lastSignal ?? null, scannedAt: existing.get(row.symbol)?.scannedAt ?? null, error: error instanceof Error ? error.message : String(error) });
-        }
-        progress();
-      }
-    };
-    await Promise.all(Array.from({ length: settings.concurrency }, () => runSymbol()));
+    const progress = () => onProgress({ symbolsScanned, errors, signalsDetected, alertsSent, ...this.queue.metrics, cycleDurationMs: this.queue.clock.now() - start });
     progress();
+    try {
+      await this.refreshUniverse(settings, now);
+      onProgress({ monitoring: this.universe.length, auto: this.universe.filter(x => x.sources.includes('auto')).length, watchlist: this.universe.filter(x => x.sources.includes('watchlist')).length, manual: this.universe.filter(x => x.sources.includes('manual')).length });
+      const barTime = closedBarTime(now, settings.scanDelaySeconds);
+      const closed = (candles: Candle[], period: number) => candles.filter(x => x.time + period <= barTime + 300);
+      const existing = new Map(getMarketSymbols(this.db).map(x => [x.symbol, x]));
+      const alreadySaved = (row: { symbol: string }) => {
+        const previous = existing.get(row.symbol);
+        return !!previous?.scannedAt && closedBarTime(Date.parse(previous.scannedAt), settings.scanDelaySeconds) === barTime && !previous.error;
+      };
+      if (this.universe.every(alreadySaved)) return;
+      const btc = closed(await this.cachedCandles('BTCUSDT', '5', 310, 300, now), 300);
+      let index = 0;
+      const runSymbol = async () => {
+        while (index < this.universe.length) {
+          this.queue.assertCurrent();
+          if (!getMarketSettings(this.db).enabled) return;
+          const row = this.universe[index++]!;
+          if (alreadySaved(row)) continue;
+          try {
+            // Auto membership includes the exit threshold; watchlist is an explicit override.
+            const includeAutoLevels = row.sources.includes('auto') || row.sources.includes('watchlist') || row.turnover >= settings.minTurnover;
+            const [rawM5, rawH1, rawH4, historicalDaily, chartDaily] = await Promise.all([
+              this.cachedCandles(row.symbol, '5', 310, 300, now),
+              this.cachedCandles(row.symbol, '60', 80, 3600, now),
+              this.cachedCandles(row.symbol, '240', 80, 14400, now),
+              this.cachedCandles(row.symbol, 'D', 400, 86400, now),
+              // The chart includes the open D1 candle. Refresh exactly its 30-bar input once per M5 scan.
+              includeAutoLevels ? this.cachedCandles(row.symbol, 'D', 30, 300, now) : Promise.resolve([]),
+            ]);
+            const m5 = closed(rawM5, 300), h1 = closed(rawH1, 3600), h4 = closed(rawH4, 14400), daily = closed(historicalDaily, 86400);
+            this.queue.assertCurrent();
+            if (m5.at(-1)?.time !== barTime || m5.length < 30 || m5.slice(-30).some((x, i, a) => i > 0 && x.time - a[i - 1]!.time !== 300)) throw new Error('Missing or stale closed M5 candles');
+            if (btc.at(-1)?.time !== barTime || btc.length < 30 || btc.slice(-30).some((x, i, a) => i > 0 && x.time - a[i - 1]!.time !== 300)) throw new Error('Missing or stale closed BTC M5 candles');
+            for (const [name, candles, period] of [['H1', h1, 3600], ['H4', h4, 14400], ['D1', daily, 86400]] as const) {
+              if (candles.at(-1)?.time !== Math.floor((barTime + 300) / period) * period - period) throw new Error(`Missing or stale closed ${name} candles`);
+            }
+            if (includeAutoLevels && chartDaily.at(-1)?.time !== Math.floor((barTime + 300) / 86400) * 86400) throw new Error('Missing or stale open D1 candle');
+            const atr = marketAtr(m5);
+            if (atr <= 0) throw new Error('Insufficient ATR history');
+            const auto = includeAutoLevels ? detectLevels(chartDaily) : { limitLevels: [], mirrorLevels: [] };
+            const levels: MonitorLevel[] = [...auto.limitLevels, ...auto.mirrorLevels].map(x => ({ ...x, id: `auto:${x.type}:${x.price}` }));
+            levels.push(...listManualLevels(this.db, row.symbol).map(x => ({ id: `manual:${x.id}`, price: x.price, type: 'manual' as const, touches: 0, strength: 0, dates: [] })));
+            const clusters = clusterLevels(levels, atr, settings.levelClusterAtr, getMarketClusters(this.db, row.symbol));
+            const observations = analyzeMarket({ symbol: row.symbol, m5, h1, h4, daily, btc, clusters, settings });
+            this.queue.assertCurrent();
+            // Reset even clusters which are no longer the nearest level ahead.
+            for (const state of getMarketStates(this.db, row.symbol)) {
+              const level = clusters.find(x => x.key === state.levelKey);
+              if (!level || Math.abs(m5.at(-1)!.close - level.price) / atr > settings.resetDistanceAtr) saveMarketState(this.db, { ...state, state: 'RESET' });
+            }
+            for (const observation of observations) {
+              this.queue.assertCurrent();
+              const result = this.persist(observation, settings, now);
+              if (result.saved && observation.scenario) signalsDetected++;
+              if (result.notification) {
+                const current = getMarketSettings(this.db), global = getNotificationSettings(this.db);
+                const allowed = current.enabled && current.telegramEnabled && global.telegramMarket && priorityRank(observation.scores.priority) >= priorityRank(current.minPriority) && ['FAST_APPROACH', 'BREAKOUT_SETUP', 'REJECTION_SETUP'].includes(observation.scenario!);
+                await deliverNotificationTelegram(this.db, result.notification, formatTelegramMarketNotification(observation, global.language, this.publicAppUrl), allowed);
+                const sent = this.db.prepare('SELECT telegram_status FROM notifications WHERE id=?').get(result.notification.id) as { telegram_status: string };
+                if (sent.telegram_status === 'sent') alertsSent++;
+              }
+            }
+            const best = [...observations].sort((a, b) => Number(!!b.scenario) - Number(!!a.scenario) || Math.max(b.scores.approach, b.scores.breakout, b.scores.rejection) - Math.max(a.scores.approach, a.scores.breakout, a.scores.rejection))[0] ?? null;
+            this.queue.assertCurrent();
+            const signal = observations.find(x => x.scenario);
+            const symbol: MarketSymbol = { ...row, observation: best, error: null, scannedAt: new Date(now).toISOString(), lastSignal: signal ? { scenario: signal.scenario!, at: new Date((barTime + 300) * 1000).toISOString() } : existing.get(row.symbol)?.lastSignal ?? null };
+            saveMarketSymbol(this.db, symbol, clusters); symbolsScanned++;
+          } catch (error) {
+            if (error instanceof ScanDeferredError) throw error;
+            errors++;
+            saveMarketSymbol(this.db, { ...row, observation: existing.get(row.symbol)?.observation ?? null, lastSignal: existing.get(row.symbol)?.lastSignal ?? null, scannedAt: existing.get(row.symbol)?.scannedAt ?? null, error: error instanceof Error ? error.message : String(error) });
+          }
+          progress();
+        }
+      };
+      const outcomes = await Promise.allSettled(Array.from({ length: settings.concurrency }, () => runSymbol()));
+      const failed = outcomes.find(x => x.status === 'rejected');
+      if (failed?.status === 'rejected') throw failed.reason;
+    } catch (error) {
+      if (!(error instanceof ScanDeferredError)) throw error;
+      errors++;
+      onProgress({ error: error.message, workerStatus: 'DEGRADED' });
+    } finally {
+      await this.queue.drain();
+      progress();
+    }
   }
   private persist(o: MarketObservation, settings: MarketMonitorSettings, now: number) {
     this.db.exec('BEGIN IMMEDIATE');

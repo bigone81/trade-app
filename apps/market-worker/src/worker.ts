@@ -1,21 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { BybitAdapter } from '@trade/exchanges-bybit';
+import { createMarketData } from './public-data.js';
 import { claimMarketLease, getMarketSettings, getMarketStatus, openDatabase, releaseMarketLease, saveMarketStatus } from '@trade/database';
 import { MarketScanner, closedBarTime, nextScanTime } from './scanner.js';
 
 const db = openDatabase();
 const owner = randomUUID();
-// No account resolver or credentials: this process can only request public market data.
-const bybit = new BybitAdapter(() => { throw new Error('Market Monitor has no trading account access'); });
-const scanner = new MarketScanner(db, {
-  getCandles: (symbol, interval, limit) => bybit.getCandles(symbol, interval, limit),
-  getTickers: () => bybit.getTickers(),
-  getInstruments: async cursor => {
-    const response = await bybit.getPublicClient().getInstrumentsInfo({ category: 'linear', status: 'Trading', limit: 1000, ...(cursor ? { cursor } : {}) });
-    if (response.retCode !== 0) throw new Error(response.retMsg || 'Bybit instruments error');
-    return response.result as Awaited<ReturnType<import('./scanner.js').PublicMarketData['getInstruments']>>;
-  },
-});
+const scanner = new MarketScanner(db, createMarketData());
 if (!claimMarketLease(db, owner)) throw new Error('Another market-worker owns the database lease');
 let status = { ...getMarketStatus(db), workerStatus: 'STARTING' as const } as ReturnType<typeof getMarketStatus>;
 let busy = false, stopping = false, lastBar: number | null = null;
