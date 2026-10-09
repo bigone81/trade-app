@@ -116,6 +116,24 @@ export function marketDate(value: string | number | null | undefined, language: 
 }
 export const marketChartUrl = (symbol: string, level?: number) => `/?symbol=${encodeURIComponent(symbol)}${level == null ? '' : `&level=${level}`}`;
 export const marketFeedPageSize = 50;
+export const marketFeedPageSizes = [25, 50, 100] as const;
+export function marketLocalDateUtcIso(value: string, endExclusive = false) {
+  const parts = value.split('-').map(Number);
+  if (parts.length !== 3 || !parts.every(Number.isInteger)) return '';
+  const year = parts[0]!, month = parts[1]!, day = parts[2]!;
+  const date = new Date(year, month - 1, day + (endExclusive ? 1 : 0));
+  return Number.isFinite(date.getTime()) ? date.toISOString() : '';
+}
+export function marketPageNumbers(current: number, totalPages: number) {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1) as (number | 'ellipsis')[];
+  const pages = new Set<number>([1, totalPages, current, current - 1, current + 1]);
+  const result: (number | 'ellipsis')[] = [];
+  [...pages].filter(page => page >= 1 && page <= totalPages).sort((a, b) => a - b).forEach((page, index, sorted) => {
+    if (index > 0 && page - sorted[index - 1]! > 1) result.push('ellipsis');
+    result.push(page);
+  });
+  return result;
+}
 export function marketFeedPage(rows: MarketSignal[]) {
   return { rows: rows.slice(0, marketFeedPageSize), hasMore: rows.length > marketFeedPageSize, nextCursor: rows[marketFeedPageSize - 1]?.id };
 }

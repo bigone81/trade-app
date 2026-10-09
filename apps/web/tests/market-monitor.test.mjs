@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultMarketMonitorSettings, marketNumericBounds, defaultScoreWeights } from '@trade/shared';
-import { marketChartUrl, marketDate, marketFeedPage, marketLabel, marketNumber, marketSettingsIssue } from '../src/marketMonitorPresentation.ts';
+import { marketChartUrl, marketDate, marketFeedPage, marketFeedPageSizes, marketLocalDateUtcIso, marketLabel, marketNumber, marketPageNumbers, marketSettingsIssue } from '../src/marketMonitorPresentation.ts';
 
 test('missing measurements stay unknown and timestamps are presented as dates', () => {
   assert.equal(marketNumber(null), '—'); assert.equal(marketNumber(undefined), '—'); assert.equal(marketNumber(NaN), '—');
@@ -17,6 +17,13 @@ test('history lookahead gives a complete page without dropping the next observat
   assert.equal(rows.filter(x => x.id < page.nextCursor)[0].id, 50);
   assert.equal(marketFeedPage(rows.slice(0, 50)).hasMore, false);
   assert.equal(marketFeedPage([]).nextCursor, undefined);
+});
+test('server-feed presentation keeps supported page sizes and compact page ranges', () => {
+  assert.deepEqual(marketFeedPageSizes, [25, 50, 100]);
+  assert.deepEqual(marketPageNumbers(1, 12), [1, 2, 'ellipsis', 12]);
+  assert.deepEqual(marketPageNumbers(7, 12), [1, 'ellipsis', 6, 7, 8, 'ellipsis', 12]);
+  assert.match(marketLocalDateUtcIso('2026-10-09'), /T.*Z$/);
+  assert.match(marketLocalDateUtcIso('2026-10-09', true), /T.*Z$/);
 });
 test('settings validation identifies the hidden field to reveal and focus', () => {
   const s = structuredClone(defaultMarketMonitorSettings);

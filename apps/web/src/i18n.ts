@@ -111,6 +111,21 @@ Object.assign(ru, {
   'This Limit crosses the current market and may execute immediately. Auto would use {type}.':'Этот Limit пересекает текущую рыночную цену и может исполниться сразу. Авто использовало бы {type}.',
   'This Stop is already on the triggered side of the market. Auto would use {type}.':'Этот Stop уже находится на сработавшей стороне рынка. Авто использовало бы {type}.'
 });
+
+Object.assign(ru, {
+  'All':'Все', 'Sort':'Сортировка', 'Newest first':'Сначала новые', 'Oldest first':'Сначала старые',
+  'Most important first':'Сначала важные', 'Least important first':'Сначала менее важные', 'Date from':'Дата от', 'Date to':'Дата до',
+  'Start date must not be later than end date.':'Начальная дата не может быть позже конечной.', 'Showing {from}–{to} of {total}':'Показано {from}–{to} из {total}',
+  '0 results':'0 записей', 'Pagination':'Пагинация', 'First':'Первая', 'Previous':'Предыдущая', 'Next':'Следующая', 'Last':'Последняя', 'Rows per page':'Записей на странице',
+  'of':'из',
+});
+Object.assign(uk, {
+  'All':'Усі', 'Sort':'Сортування', 'Newest first':'Спочатку нові', 'Oldest first':'Спочатку старі',
+  'Most important first':'Спочатку важливі', 'Least important first':'Спочатку менш важливі', 'Date from':'Дата від', 'Date to':'Дата до',
+  'Start date must not be later than end date.':'Початкова дата не може бути пізнішою за кінцеву.', 'Showing {from}–{to} of {total}':'Показано {from}–{to} із {total}',
+  '0 results':'0 записів', 'Pagination':'Пагінація', 'First':'Перша', 'Previous':'Попередня', 'Next':'Наступна', 'Last':'Остання', 'Rows per page':'Записів на сторінці',
+  'of':'із',
+});
 Object.assign(uk, {
   'Freeze levels':'Зафіксувати рівні','Copies automatic levels currently visible on the chart into Manual Levels':'Копіює лише видимі зараз автоматичні рівні в ручні.','Saved {count} visible levels':'Збережено видимих рівнів: {count}','All visible levels are already manual':'Усі видимі рівні вже збережені вручну.',
   'Neutral chart controls use automatic contrast, so white objects do not disappear on a light background.':'Нейтральні елементи графіка використовують автоконтраст, тому світлі об’єкти не зникають на світлому фоні.',

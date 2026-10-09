@@ -25,6 +25,9 @@ export function initializeMarketMonitor(db: SqliteDb) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(symbol,level_key,bar_time)
     );
     CREATE INDEX IF NOT EXISTS idx_market_signals_created ON market_signals(id DESC);
+    CREATE INDEX IF NOT EXISTS idx_market_signals_created_at ON market_signals(created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_market_signals_priority_created ON market_signals(priority, created_at, id);
+    CREATE INDEX IF NOT EXISTS idx_market_signals_signal_created ON market_signals(created_at, id) WHERE signal_type IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_market_signals_symbol ON market_signals(symbol,id DESC);
     CREATE TABLE IF NOT EXISTS market_monitor_symbols (
       symbol TEXT PRIMARY KEY, payload_json TEXT NOT NULL, clusters_json TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -79,6 +82,51 @@ export function listMarketSignals(db: SqliteDb, filters: { symbol?: string; befo
   if (filters.signalsOnly) conditions.push('signal_type IS NOT NULL');
   values.push(Math.max(1, Math.min(200, filters.limit ?? 50)));
   return db.prepare(`SELECT * FROM market_signals ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`).all(...values).map(mapSignal);
+}
+export type MarketSignalSort = 'newest' | 'oldest' | 'priority_desc' | 'priority_asc';
+export interface MarketSignalPageFilters {
+  symbol?: string;
+  page: number;
+  pageSize: number;
+  priority?: MarketSignal['scores']['priority'];
+  signalsOnly?: boolean;
+  dateFromUtc?: string;
+  dateToUtcExclusive?: string;
+  sort: MarketSignalSort;
+}
+export interface MarketSignalPage {
+  items: MarketSignal[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+const priorityRankSql = "CASE priority WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END";
+const pageOrderSql: Record<MarketSignalSort, string> = {
+  newest: 'created_at DESC, id DESC',
+  oldest: 'created_at ASC, id ASC',
+  priority_desc: `${priorityRankSql} DESC, created_at DESC, id DESC`,
+  priority_asc: `${priorityRankSql} ASC, created_at DESC, id DESC`,
+};
+function marketSignalPageConditions(filters: MarketSignalPageFilters) {
+  const conditions: string[] = [];
+  const values: (string | number)[] = [];
+  if (filters.symbol) { conditions.push('symbol=?'); values.push(filters.symbol); }
+  if (filters.priority) { conditions.push('priority=?'); values.push(filters.priority); }
+  if (filters.signalsOnly) conditions.push('signal_type IS NOT NULL');
+  if (filters.dateFromUtc) { conditions.push('created_at>=?'); values.push(filters.dateFromUtc); }
+  if (filters.dateToUtcExclusive) { conditions.push('created_at<?'); values.push(filters.dateToUtcExclusive); }
+  return { where: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '', values };
+}
+/** Returns one page without parsing payload JSON for rows outside that page. */
+export function listMarketSignalPage(db: SqliteDb, filters: MarketSignalPageFilters): MarketSignalPage {
+  const { where, values } = marketSignalPageConditions(filters);
+  const total = Number((db.prepare(`SELECT COUNT(*) AS total FROM market_signals ${where}`).get(...values) as { total: number }).total);
+  const totalPages = Math.ceil(total / filters.pageSize);
+  const page = totalPages === 0 ? 1 : Math.min(filters.page, totalPages);
+  const offset = (page - 1) * filters.pageSize;
+  const rows = db.prepare(`SELECT * FROM market_signals ${where} ORDER BY ${pageOrderSql[filters.sort]} LIMIT ? OFFSET ?`).all(...values, filters.pageSize, offset);
+  return { items: rows.map(mapSignal), page, pageSize: filters.pageSize, total, totalPages };
 }
 export function getMarketSignal(db: SqliteDb, id: number): MarketSignal | null { const row = db.prepare('SELECT * FROM market_signals WHERE id=?').get(id); return row ? mapSignal(row) : null; }
 export function attachMarketNotification(db: SqliteDb, id: number, notificationId: number) { db.prepare('UPDATE market_signals SET notified=1,notification_id=? WHERE id=?').run(notificationId, id); }

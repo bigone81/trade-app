@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, ArrowUpRight, ListChecks, Radar, Settings2, Trash2 } from 'lucide-react';
-import { marketNumericBounds, type MarketMonitorSettings, type MarketMonitorStatus, type MarketNumericKey, type MarketObservation, type MarketSignal, type MarketSymbol } from '@trade/shared';
+import { marketNumericBounds, type MarketMonitorSettings, type MarketMonitorStatus, type MarketNumericKey, type MarketObservation, type MarketPriority, type MarketSignal, type MarketSignalPage, type MarketSignalSort, type MarketSymbol } from '@trade/shared';
 import { validateMarketSettings } from '@trade/domain';
 import { api, json } from '../api';
 import { useI18n } from '../i18n';
-import { marketLabel, marketNumber as num, marketDate, marketChartUrl, marketFeedPage, marketFeedPageSize, marketSettingsIssue } from '../marketMonitorPresentation';
+import { marketLabel, marketNumber as num, marketDate, marketChartUrl, marketFeedPageSizes, marketLocalDateUtcIso, marketPageNumbers, marketSettingsIssue } from '../marketMonitorPresentation';
 
 const base = '/api/market-monitor';
 const simpleSettings: MarketNumericKey[] = ['minTurnover', 'maxAutoSymbols', 'cooldownMinutes'];
@@ -104,14 +104,33 @@ export default function MarketMonitorPage() {
   const { t, language } = useI18n(), navigate = useNavigate();
   const [tab, setTab] = useState<'live' | 'feed' | 'settings'>('live');
   const [selected, setSelected] = useState<MarketObservation | null>(null);
-  const [cursors, setCursors] = useState<(number | undefined)[]>([undefined]);
   const [signalsOnly, setSignalsOnly] = useState(true), [filter, setFilter] = useState('');
-  const before = cursors.at(-1);
+  const [priority, setPriority] = useState<MarketPriority | ''>('');
+  const [sort, setSort] = useState<MarketSignalSort>('newest');
+  const [dateFrom, setDateFrom] = useState(''), [dateTo, setDateTo] = useState('');
+  const [page, setPage] = useState(1), [pageSize, setPageSize] = useState(50);
   const status = useQuery<MarketMonitorStatus>({ queryKey: ['mm-status'], queryFn: () => api(`${base}/status`), refetchInterval: 5000 });
   const symbols = useQuery<MarketSymbol[]>({ queryKey: ['mm-symbols'], queryFn: () => api(`${base}/symbols`), refetchInterval: 10000 });
   const settings = useQuery<MarketMonitorSettings>({ queryKey: ['mm-settings'], queryFn: () => api(`${base}/settings`) });
-  const feed = useQuery<MarketSignal[]>({ queryKey: ['mm-feed', before, signalsOnly], queryFn: () => api(`${base}/signals?limit=${marketFeedPageSize + 1}&signalsOnly=${signalsOnly}${before ? `&before=${before}` : ''}`), refetchInterval: before ? false : 10000, enabled: tab === 'feed' });
-  const s = status.data, page = marketFeedPage(feed.data ?? []);
+  const invalidDateRange = Boolean(dateFrom && dateTo && dateFrom > dateTo);
+  const feed = useQuery<MarketSignalPage>({
+    queryKey: ['mm-feed', page, pageSize, priority, signalsOnly, dateFrom, dateTo, sort],
+    queryFn: () => {
+      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), signalsOnly: String(signalsOnly), sort });
+      if (priority) params.set('priority', priority);
+      if (dateFrom) params.set('dateFromUtc', marketLocalDateUtcIso(dateFrom));
+      if (dateTo) params.set('dateToUtcExclusive', marketLocalDateUtcIso(dateTo, true));
+      return api<MarketSignalPage>(`${base}/signals?${params}`);
+    },
+    refetchInterval: page === 1 && sort === 'newest' && !invalidDateRange ? 10000 : false,
+    enabled: tab === 'feed' && !invalidDateRange,
+  });
+  const s = status.data, feedPage = invalidDateRange || feed.isPending ? undefined : feed.data;
+  useEffect(() => {
+    if (!feedPage) return;
+    if (feedPage.page !== page) setPage(feedPage.page);
+    else if (feedPage.totalPages === 0 && page !== 1) setPage(1);
+  }, [feedPage, page]);
   const visibleSymbols = symbols.data?.filter(row => row.symbol.includes(filter.trim().toUpperCase())) ?? [];
   const date = (value: string | number | null | undefined) => marketDate(value, language);
   const currentError = tab === 'live' ? symbols.error : tab === 'feed' ? feed.error : settings.error;
@@ -157,15 +176,34 @@ export default function MarketMonitorPage() {
       </div>
     </section>
     <section id="mm-panel-feed" role="tabpanel" aria-labelledby="mm-tab-feed" hidden={tab !== 'feed'}>
-      <div className="top-controls mm-feed-controls"><label><input type="checkbox" checked={signalsOnly} onChange={e => { setSignalsOnly(e.target.checked); setCursors([undefined]); }}/>{t('Signals only')}</label><button className="btn ghost" disabled={before === undefined} onClick={() => setCursors([undefined])}>{t('Latest')}</button></div>
-      {feed.isPending ? <div role="status" className="card empty">{t('Loading…')}</div> : <>
-        {page.rows.map(o => <details className="card mm-signal" key={o.id}>
+       <div className="mm-feed-controls">
+         <label className="setting-check"><input type="checkbox" checked={signalsOnly} onChange={e => { setSignalsOnly(e.target.checked); setPage(1); }}/>{t('Signals only')}</label>
+         <button className="btn ghost" disabled={page === 1 && sort === 'newest'} onClick={() => { setSort('newest'); setPage(1); }}>{t('Latest')}</button>
+         <label className="field"><span>{t('Priority')}</span><select className="select" value={priority} onChange={e => { setPriority(e.target.value as MarketPriority | ''); setPage(1); }}><option value="">{t('All')}</option>{(['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'] as const).map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+         <label className="field"><span>{t('Sort')}</span><select className="select" value={sort} onChange={e => { setSort(e.target.value as MarketSignalSort); setPage(1); }}><option value="newest">{t('Newest first')}</option><option value="oldest">{t('Oldest first')}</option><option value="priority_desc">{t('Most important first')}</option><option value="priority_asc">{t('Least important first')}</option></select></label>
+         <label className="field"><span>{t('Date from')}</span><input className="input" type="date" value={dateFrom} max={dateTo || undefined} onChange={e => { setDateFrom(e.target.value); setPage(1); }}/></label>
+         <label className="field"><span>{t('Date to')}</span><input className="input" type="date" value={dateTo} min={dateFrom || undefined} onChange={e => { setDateTo(e.target.value); setPage(1); }}/></label>
+       </div>
+       {invalidDateRange && <div role="alert" className="card mm-error"><p className="negative">{t('Start date must not be later than end date.')}</p></div>}
+       {!invalidDateRange && feed.isPending && !feedPage ? <div role="status" className="card empty">{t('Loading…')}</div> : !invalidDateRange ? <>
+         {(feedPage?.items ?? []).map(o => <details className="card mm-signal" key={o.id}>
           <summary><span className={`badge mm-priority ${o.scores.priority}`}>{o.scores.priority}</span><strong>{o.symbol}</strong><span>{o.scenario ? marketLabel(o.scenario, language) : t('Observation')}{o.scores.conflict ? ' · MIXED / CONFLICTING' : ''}</span><span>{t('Approach')} {o.scores.approach} / {t('Breakout')} {o.scores.breakout} / {t('Rejection')} {o.scores.rejection}</span><span>{t('Level')}: {num(o.cluster.price, 8)}</span><small>{date(o.createdAt)}</small></summary>
           <Link to={marketChartUrl(o.symbol, o.cluster.price)} target="_blank" rel="noopener noreferrer">{t('Open chart')} ↗</Link><Checklist observation={o}/>
         </details>)}
-        {!feed.error && !page.rows.length && <div role="status" className="card empty">{t(signalsOnly ? 'No signals yet. Turn off Signals only to see all observations.' : 'No observations yet.')}</div>}
-      </>}
-      <div className="mm-pagination"><button className="btn secondary" disabled={cursors.length <= 1 || feed.isFetching} onClick={() => setCursors(current => current.slice(0, -1))}>{t('Newer observations')}</button><span>{t('Page')} {cursors.length}</span><button className="btn secondary" disabled={!page.hasMore || feed.isFetching || !!feed.error} onClick={() => setCursors(current => [...current, page.nextCursor])}>{t('Older observations')}</button></div>
+         {!feed.error && !feedPage?.items.length && <div role="status" className="card empty">{t(signalsOnly ? 'No signals yet. Turn off Signals only to see all observations.' : 'No observations yet.')}</div>}
+       </> : null}
+       {feedPage && !invalidDateRange && <div className="mm-pagination-wrap">
+         <div className="mm-pagination-summary">{feedPage.total ? t('Showing {from}–{to} of {total}', { from: (feedPage.page - 1) * feedPage.pageSize + 1, to: Math.min(feedPage.page * feedPage.pageSize, feedPage.total), total: feedPage.total }) : t('0 results')}</div>
+         <div className="mm-pagination" aria-label={t('Pagination')}>
+           <span className="mm-page-indicator">{t('Page')} {feedPage.page} {t('of')} {feedPage.totalPages}</span>
+           <button className="btn secondary" disabled={feedPage.page <= 1 || feed.isFetching} onClick={() => setPage(1)}>{t('First')}</button>
+           <button className="btn secondary" disabled={feedPage.page <= 1 || feed.isFetching} onClick={() => setPage(current => Math.max(1, current - 1))}>{t('Previous')}</button>
+           {marketPageNumbers(feedPage.page, feedPage.totalPages).map((number, index) => number === 'ellipsis' ? <span className="mm-page-ellipsis" key={`ellipsis-${index}`}>…</span> : <button className="btn secondary" key={number} aria-current={number === feedPage.page ? 'page' : undefined} disabled={number === feedPage.page || feed.isFetching} onClick={() => setPage(number)}>{number}</button>)}
+           <button className="btn secondary" disabled={feedPage.page >= feedPage.totalPages || feed.isFetching} onClick={() => setPage(current => Math.min(feedPage.totalPages, current + 1))}>{t('Next')}</button>
+           <button className="btn secondary" disabled={feedPage.page >= feedPage.totalPages || feed.isFetching} onClick={() => setPage(feedPage.totalPages)}>{t('Last')}</button>
+         </div>
+         <label className="field mm-page-size"><span>{t('Rows per page')}</span><select className="select" value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }}>{marketFeedPageSizes.map(value => <option key={value} value={value}>{value}</option>)}</select></label>
+       </div>}
     </section>
     {/* Keep the settings form mounted so switching tabs never discards a draft. */}
     <section id="mm-panel-settings" role="tabpanel" aria-labelledby="mm-tab-settings" hidden={tab !== 'settings'}>

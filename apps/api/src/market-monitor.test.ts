@@ -17,6 +17,11 @@ test('Market Monitor API validates settings, watchlist, pagination and missing s
     assert.equal((await app.inject({ method: 'POST', url: '/api/market-monitor/watchlist', payload: { symbol: "';DROP TABLE manual_levels;--" } })).statusCode, 400);
     assert.equal((await app.inject('/api/market-monitor/signals?limit=99999')).statusCode, 400);
     assert.equal((await app.inject('/api/market-monitor/signals?signalsOnly=true')).statusCode, 200);
+    const page = await app.inject('/api/market-monitor/signals?page=1&pageSize=25&sort=priority_desc&dateFromUtc=2026-10-09T00:00:00.000Z&dateToUtcExclusive=2026-10-10T00:00:00.000Z');
+    assert.equal(page.statusCode, 200); assert.deepEqual(page.json(), { items: [], page: 1, pageSize: 25, total: 0, totalPages: 0 });
+    assert.equal((await app.inject('/api/market-monitor/signals?page=0')).statusCode, 400);
+    assert.equal((await app.inject('/api/market-monitor/signals?page=1&dateFromUtc=2026-10-10T00:00:00.000Z&dateToUtcExclusive=2026-10-09T00:00:00.000Z')).statusCode, 400);
+    assert.equal((await app.inject('/api/market-monitor/signals?page=1&unknown=value')).statusCode, 400);
     assert.equal((await app.inject('/api/market-monitor/signals/1')).statusCode, 404);
     assert.equal((await app.inject('/api/market-monitor/signals/NaN')).statusCode, 400);
     assert.equal((await app.inject('/api/market-monitor/status')).json().workerStatus, 'OFFLINE');

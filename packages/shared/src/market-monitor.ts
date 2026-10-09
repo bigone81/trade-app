@@ -73,6 +73,8 @@ export interface MarketObservation {
   formation?: { kind: 'TVH1' | 'TVH2' | 'TVH3'; stage: string };
 }
 export interface MarketSignal extends MarketObservation { id: number; notified: boolean; notificationId: number | null; createdAt: string; }
+export type MarketSignalSort = 'newest' | 'oldest' | 'priority_desc' | 'priority_asc';
+export interface MarketSignalPage { items: MarketSignal[]; page: number; pageSize: number; total: number; totalPages: number; }
 export interface MarketAlertState {
   symbol: string; levelKey: string; scenario: MarketScenario; state: MarketPhase;
   lastAlertAt: number | null; lastScore: number; lastDistanceAtr: number; lastBarTime: number;
