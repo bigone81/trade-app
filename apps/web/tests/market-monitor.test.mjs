@@ -1,5 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { marketScenarioDirection } from '../src/marketMonitorPresentation.ts';
+
+test('scenario trade side reverses for rejection and false breaks, not for breakouts', () => {
+  for (const direction of ['UP', 'DOWN']) {
+    for (const scenario of ['REJECTION_SETUP', 'FALSE_BREAKOUT', 'BREAKOUT_SETUP', 'BREAKOUT_CONFIRMED']) {
+      const result = marketScenarioDirection({ direction, scenario, scores: { conflict: false } });
+      const expected = {
+        UP: { REJECTION_SETUP: 'SHORT', FALSE_BREAKOUT: 'SHORT', BREAKOUT_SETUP: 'LONG', BREAKOUT_CONFIRMED: 'LONG' },
+        DOWN: { REJECTION_SETUP: 'LONG', FALSE_BREAKOUT: 'LONG', BREAKOUT_SETUP: 'SHORT', BREAKOUT_CONFIRMED: 'SHORT' },
+      };
+      assert.equal(result.side, expected[direction][scenario]);
+      assert.equal(marketScenarioDirection({ direction, scenario, scores: { conflict: true } }).side, null);
+    }
+    for (const scenario of ['FAST_APPROACH', null]) {
+      assert.equal(marketScenarioDirection({ direction, scenario, scores: { conflict: false } }).side, null);
+    }
+  }
+  assert.equal(marketScenarioDirection({ direction: 'UP', scenario: 'FALSE_BREAKOUT', scores: { conflict: false } }).movement, 'Attempted upward break of resistance');
+});
 import { defaultMarketMonitorSettings, marketNumericBounds, defaultScoreWeights } from '@trade/shared';
 import { marketChartUrl, marketDate, marketFeedPage, marketFeedPageSizes, marketLocalDateUtcIso, marketLabel, marketNumber, marketPageNumbers, marketSettingsIssue } from '../src/marketMonitorPresentation.ts';
 

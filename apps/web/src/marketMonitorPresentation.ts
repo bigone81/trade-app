@@ -1,4 +1,18 @@
-import { marketNumericBounds, type MarketMonitorSettings, type MarketNumericKey, type MarketSignal } from '@trade/shared';
+import { marketNumericBounds, type MarketMonitorSettings, type MarketNumericKey, type MarketSignal, type MarketObservation } from '@trade/shared';
+
+/** Presentation only: direction stores the approach/cross, not the scenario's trade side. */
+export function marketScenarioDirection(o: Pick<MarketObservation, 'direction' | 'scenario' | 'scores'>) {
+  const reversal = o.scenario === 'REJECTION_SETUP' || o.scenario === 'FALSE_BREAKOUT';
+  const breakout = o.scenario === 'BREAKOUT_SETUP' || o.scenario === 'BREAKOUT_CONFIRMED';
+  const side = o.scores.conflict || (!reversal && !breakout) ? null
+    : (o.direction === 'UP') !== reversal ? 'LONG' : 'SHORT';
+  const movement = o.scenario === 'FALSE_BREAKOUT'
+    ? o.direction === 'UP' ? 'Attempted upward break of resistance' : 'Attempted downward break of support'
+    : o.scenario === 'BREAKOUT_CONFIRMED'
+      ? o.direction === 'UP' ? 'Upward break of resistance' : 'Downward break of support'
+      : o.direction === 'UP' ? 'Price approaching resistance' : 'Price approaching support';
+  return { side, movement, expectation: reversal ? 'Expected reversal' : 'Expected continuation' } as const;
+}
 
 type Language = 'en' | 'ru' | 'uk';
 const labels: Record<string, readonly [string, string, string]> = {

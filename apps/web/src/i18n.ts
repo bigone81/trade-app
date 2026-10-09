@@ -156,6 +156,29 @@ Object.assign(uk, {
 
 const dictionaries: Record<AppLanguage, Dict> = { en: {}, uk, ru };
 
+Object.assign(ru, {
+  'Price approaching resistance':'Цена подходит к сопротивлению',
+  'Price approaching support':'Цена подходит к поддержке',
+  'Attempted upward break of resistance':'Попытка пробоя сопротивления вверх',
+  'Attempted downward break of support':'Попытка пробоя поддержки вниз',
+  'Upward break of resistance':'Пробой сопротивления вверх',
+  'Downward break of support':'Пробой поддержки вниз',
+  'Expected reversal':'Ожидаемый отбой',
+  'Expected continuation':'Ожидаемое продолжение',
+  'Trade direction is not confirmed':'Направление сделки не подтверждено',
+});
+Object.assign(uk, {
+  'Price approaching resistance':'Ціна підходить до опору',
+  'Price approaching support':'Ціна підходить до підтримки',
+  'Attempted upward break of resistance':'Спроба пробою опору вгору',
+  'Attempted downward break of support':'Спроба пробою підтримки вниз',
+  'Upward break of resistance':'Пробій опору вгору',
+  'Downward break of support':'Пробій підтримки вниз',
+  'Expected reversal':'Очікуваний відбій',
+  'Expected continuation':'Очікуване продовження',
+  'Trade direction is not confirmed':'Напрямок угоди не підтверджено',
+});
+
 export function translate(language: AppLanguage, key: string, vars?: Vars): string {
   let value = dictionaries[language][key] || key;
   if (vars) for (const [name, replacement] of Object.entries(vars)) value = value.replaceAll(`{${name}}`, String(replacement));

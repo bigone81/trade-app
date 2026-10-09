@@ -6,15 +6,25 @@ import { marketNumericBounds, type MarketMonitorSettings, type MarketMonitorStat
 import { validateMarketSettings } from '@trade/domain';
 import { api, json } from '../api';
 import { useI18n } from '../i18n';
-import { marketLabel, marketNumber as num, marketDate, marketChartUrl, marketFeedPageSizes, marketLocalDateUtcIso, marketPageNumbers, marketSettingsIssue } from '../marketMonitorPresentation';
+import { marketLabel, marketNumber as num, marketDate, marketChartUrl, marketFeedPageSizes, marketLocalDateUtcIso, marketPageNumbers, marketSettingsIssue, marketScenarioDirection } from '../marketMonitorPresentation';
 
 const base = '/api/market-monitor';
 const simpleSettings: MarketNumericKey[] = ['minTurnover', 'maxAutoSymbols', 'cooldownMinutes'];
 
+function ScenarioDirection({ observation: o }: { observation: MarketObservation }) {
+  const { t } = useI18n();
+  const { side, movement, expectation } = marketScenarioDirection(o);
+  return <span className="mm-scenario-direction">
+    <span className="muted">{o.direction === 'UP' ? '↑' : '↓'} {t(movement)}</span>
+    <span className={`mm-direction ${side === 'LONG' ? 'up' : side === 'SHORT' ? 'down' : 'muted'}`}>
+      {side ? <>{side === 'LONG' ? '↑' : '↓'} {t(expectation)} · {side}</> : t('Trade direction is not confirmed')}
+    </span>
+  </span>;
+}
+
 function Checklist({ observation: o }: { observation: MarketObservation }) {
   const { t, language } = useI18n();
   return <div className="mm-checklist">
-    <p className={`mm-direction ${o.direction === 'UP' ? 'up' : 'down'}`} aria-label={`${t(o.direction === 'UP' ? 'Long' : 'Short')} · ${t(o.direction === 'UP' ? 'Resistance' : 'Support')}`}><strong aria-hidden="true">{o.direction === 'UP' ? '↑' : '↓'}</strong> {t(o.direction === 'UP' ? 'Long' : 'Short')} · {t(o.direction === 'UP' ? 'Resistance' : 'Support')}</p>
     {o.scores.conflict && <p className="warning-text">MIXED / CONFLICTING · {t('Score difference is too small for a directional alert.')}</p>}
     <div className="mm-scores">{(['Approach', 'Breakout', 'Rejection'] as const).map(group => <div className="metric" key={group}><small>{t(group)}</small><strong>{o.scores[group.toLowerCase() as 'approach' | 'breakout' | 'rejection']}</strong></div>)}</div>
     <p className="muted">{t('A dash means the feature was not confirmed; missing measurements are not zero.')}</p>
@@ -41,6 +51,7 @@ function ChecklistDialog({ observation, onClose }: { observation: MarketObservat
   return <dialog ref={ref} className="card mm-dialog" aria-labelledby="mm-checklist-title" onCancel={onClose} onClick={e => { if (e.target === e.currentTarget) { const r = e.currentTarget.getBoundingClientRect(); if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) onClose(); } }}>
     <div className="page-head"><h2 id="mm-checklist-title">{observation.symbol} · {num(observation.cluster.price, 8)}</h2><button autoFocus className="btn secondary" onClick={onClose}>{t('Close')}</button></div>
     <p className="muted">{t('Observation time')}: {marketDate(observation.barTime + 300, language)}</p>
+    <ScenarioDirection observation={observation}/>
     <Link to={marketChartUrl(observation.symbol, observation.cluster.price)}>{t('Open chart')} ↗</Link>
     <Checklist observation={observation}/>
   </dialog>;
@@ -190,7 +201,11 @@ export default function MarketMonitorPage() {
        {invalidDateRange && <div role="alert" className="card mm-error"><p className="negative">{t('Start date must not be later than end date.')}</p></div>}
        {!invalidDateRange && feed.isPending && !feedPage ? <div role="status" className="card empty">{t('Loading…')}</div> : !invalidDateRange ? <>
          {(feedPage?.items ?? []).map(o => <details className="card mm-signal" key={o.id}>
-          <summary><span className={`badge mm-priority ${o.scores.priority}`}>{o.scores.priority}</span><strong>{o.symbol}</strong><span className={`mm-direction ${o.direction === 'UP' ? 'up' : 'down'}`} aria-label={t(o.direction === 'UP' ? 'Long' : 'Short')}><strong aria-hidden="true">{o.direction === 'UP' ? '↑' : '↓'}</strong> {t(o.direction === 'UP' ? 'Long' : 'Short')}</span><span>{o.scenario ? marketLabel(o.scenario, language) : t('Observation')}{o.scores.conflict ? ' · MIXED / CONFLICTING' : ''}</span><span>{t('Approach')} {o.scores.approach} / {t('Breakout')} {o.scores.breakout} / {t('Rejection')} {o.scores.rejection}</span><span>{t('Level')}: {num(o.cluster.price, 8)}</span><small>{date(o.createdAt)}</small></summary>
+          <summary>
+            <span className="mm-signal-heading"><span className={`badge mm-priority ${o.scores.priority}`}>{o.scores.priority}</span><strong>{o.symbol}</strong><span>{o.scenario ? marketLabel(o.scenario, language) : t('Observation')}{o.scores.conflict ? ' · MIXED / CONFLICTING' : ''}</span></span>
+            <ScenarioDirection observation={o}/>
+            <span className="mm-signal-meta"><span>{t('Approach')} {o.scores.approach} / {t('Breakout')} {o.scores.breakout} / {t('Rejection')} {o.scores.rejection}</span><span>{t('Level')}: {num(o.cluster.price, 8)}</span><small>{date(o.createdAt)}</small></span>
+          </summary>
           <Link to={marketChartUrl(o.symbol, o.cluster.price)} target="_blank" rel="noopener noreferrer">{t('Open chart')} ↗</Link><Checklist observation={o}/>
         </details>)}
          {!feed.error && !feedPage?.items.length && <div role="status" className="card empty">{t(signalsOnly ? 'No signals yet. Turn off Signals only to see all observations.' : 'No observations yet.')}</div>}
