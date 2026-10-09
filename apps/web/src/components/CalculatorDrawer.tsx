@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueries } from '@tanstack/react-query';
 import { ChevronRight, X } from 'lucide-react';
-import { calculateRiskReward, calculateTrade } from '@trade/domain';
+import { calculateRiskReward, calculateTrade, calculateTradeFinance, resolveEntryFee, type TradeFinance } from '@trade/domain';
+import { DEFAULT_FEE_RATES, type AccountFeeRates, type FeeRates } from '@trade/shared';
+import CalculatorFees from './CalculatorFees';
 import type { AccountPublic, AutoLevel, ManualLevel, RiskReward } from '@trade/shared';
 import { api, json, money, num } from '../api';
 import {
@@ -47,6 +49,9 @@ type OrderPreviewRow = {
   riskAmount: number;
   positionSize: number;
   notional: number;
+  finance: TradeFinance | null;
+  rates: FeeRates;
+  feeSource: 'exchange' | 'manual' | 'fallback';
   ready: boolean;
   error: string;
 };
@@ -66,7 +71,8 @@ export default function CalculatorDrawer({
   liveEnabled,
   onUpdateRiskReward,
 }: Props) {
-  const { preferences } = usePreferences();
+  const { preferences, save } = usePreferences();
+  const fees = preferences.calculatorFees;
   const { t, language } = useI18n();
   const drawerRef = useRef<HTMLElement | null>(null);
   const [accountSelection, setAccountSelectionState] = useState<CalculatorAccountSelection>(() =>
@@ -133,6 +139,14 @@ export default function CalculatorDrawer({
     }
     return accounts.filter((account) => account.id === accountSelection.singleAccountId);
   }, [accounts, accountSelection]);
+
+  const feeQueries = useQueries({ queries: selectedAccounts.map(account => ({
+    queryKey: ['fee-rates', account.id, symbol],
+    queryFn: () => api<AccountFeeRates>(`/api/trade/fee-rates?accountId=${account.id}&symbol=${encodeURIComponent(symbol)}`),
+    enabled: open && !account.demo && !fees.manualRates && !fees.accountRates[String(account.id)],
+    staleTime: 30 * 60_000,
+    retry: false,
+  })) });
 
   const accountSelectorValue = accountSelection.mode === 'single'
     ? `single:${accountSelection.singleAccountId}`
@@ -274,7 +288,8 @@ export default function CalculatorDrawer({
     trigger: legacy.triggerPoint,
     rr: legacy.rr,
   };
-  const riskDistance = Math.abs(values.entry - values.stop);
+  const entryLiquidity = resolveEntryFee(executionMode, fees.entryMode, fees.manualEntry);
+  const postOnly = usesLimitPrice && fees.postOnly;
   const legacyPointTypeLabel = (() => {
     const technical = t('Technical SL');
     const labels: Record<number, string> = {
@@ -295,22 +310,31 @@ export default function CalculatorDrawer({
     return Number(row?.equity || 0);
   };
 
-  const orderRows = useMemo<OrderPreviewRow[]>(() => selectedAccounts.map((account) => {
+  const orderRows: OrderPreviewRow[] = selectedAccounts.map((account, index) => {
     const row = summaryByAccount.get(account.id);
     const riskPercent = riskForAccount(account.id);
     const sizingBase = sizingBaseFor(account.id, row);
     const riskAmount = sizingBase * Math.max(0, riskPercent) * 0.01;
-    const positionSize = riskDistance > 0 ? riskAmount / riskDistance : 0;
-    const notional = positionSize * values.entry;
+    const manualRates = fees.accountRates[String(account.id)] ?? fees.manualRates;
+    const remote = feeQueries[index]?.data;
+    const rates = manualRates ?? remote ?? DEFAULT_FEE_RATES;
+    const feeSource = manualRates ? 'manual' as const : remote?.source ?? 'fallback' as const;
+    let finance: TradeFinance | null = null;
     let rowError = '';
+    try {
+      finance = calculateTradeFinance({ side, entry: values.entry, stop: values.stop, target: values.target,
+        balance: sizingBase, riskPercent, includeFees: fees.includeFees, entryLiquidity, rates });
+    } catch { rowError = t('Invalid sizing inputs or fee rates.'); }
+    const positionSize = finance?.positionSize ?? 0;
+    const notional = finance?.notional ?? 0;
     if (!row) rowError = copy.loading;
     else if (row.online === false) rowError = row.error || copy.offline;
     else if (preferences.riskBase === 'fixed' && sizingBase <= 0) rowError = copy.fixedMissing;
     else if (sizingBase <= 0) rowError = `${copy.sizingBase} = 0`;
     else if (riskPercent <= 0) rowError = `${copy.risk} = 0`;
     else if (!validGeometry || positionSize <= 0) rowError = 'Invalid size';
-    return { account, summary: row, sizingBase, riskPercent, riskAmount, positionSize, notional, ready: !rowError, error: rowError };
-  }), [selectedAccounts, summaryByAccount, tradeRiskByAccount, preferences.riskBase, preferences.fixedAccountSize, preferences.accountRiskPercent, preferences.defaultRiskPercent, riskDistance, values.entry, validGeometry, language]);
+    return { account, summary: row, sizingBase, riskPercent, riskAmount, positionSize, notional, finance, rates, feeSource, ready: !rowError, error: rowError };
+  });
 
   const selectedRisks = orderRows.map((row) => row.riskPercent);
   const commonRisk = selectedRisks.length && selectedRisks.every((value) => Math.abs(value - selectedRisks[0]!) < 1e-12) ? selectedRisks[0]! : null;
@@ -336,6 +360,9 @@ export default function CalculatorDrawer({
     autoMode: mode === 'auto',
     autoReferencePrice: Number(autoDecisionPrice) || undefined,
     qty: row.positionSize,
+    postOnly,
+    fees: { includeInRisk: fees.includeFees, entryMode: fees.entryMode, manualEntry: fees.manualEntry,
+      rates: { maker: row.rates.maker, taker: row.rates.taker }, source: row.feeSource },
     price: usesLimitPrice ? values.entry : undefined,
     triggerPrice: isStopExecution ? values.trigger : undefined,
     stopLoss: values.stop,
@@ -478,6 +505,9 @@ export default function CalculatorDrawer({
         <div className="field"><label>ATR (D,14)</label><input className="input" value={atr ? num(atr, 6) : '—'} readOnly /></div>
       </div>
 
+      <CalculatorFees fees={fees} onChange={next => save({ ...preferences, calculatorFees: next })}
+        usesLimitPrice={usesLimitPrice} entryLiquidity={entryLiquidity} rows={orderRows} />
+
       <div className="drawer-section">
         <div className="metric-grid">
           <div className="metric"><small>{orderRows.length > 1 ? t('Account') : riskBaseLabel}</small><strong>{orderRows.length > 1 ? orderRows.length : money(orderRows[0]?.sizingBase || 0)}</strong></div>
@@ -485,7 +515,7 @@ export default function CalculatorDrawer({
           <div className="metric"><small>{t('Entry')}</small><strong>{num(values.entry, 8)}</strong></div>
           <div className="metric"><small>{t('Stop')}</small><strong>{num(values.stop, 8)}</strong></div>
           <div className="metric"><small>{t('Target')}</small><strong>{num(values.target, 8)}</strong></div>
-          <div className="metric"><small>R:R</small><strong>{Number(values.rr).toFixed(2)}</strong></div>
+          <div className="metric"><small>Gross R:R</small><strong>1:{Number(values.rr).toFixed(2)}</strong></div>
           <div className="metric"><small>{orderRows.length > 1 ? copy.sizingBase : t('Position qty')}</small><strong>{orderRows.length > 1 ? money(totalBase) : num(orderRows[0]?.positionSize || 0, 8)}</strong></div>
           <div className="metric"><small>{t('Notional')}</small><strong>{money(totalNotional)}</strong></div>
         </div>
@@ -523,8 +553,8 @@ export default function CalculatorDrawer({
         onConfirm={() => place.mutate(undefined)}
         body={<div className="calculator-confirm-batch">
           <b>{symbol} {t(side)}</b><br />{mode === 'auto' ? `${t('Auto')} → ${executionModeLabel}` : executionModeLabel}<br />
-          {t('Entry')} {num(values.entry, 8)} · SL {num(values.stop, 8)} · TP {num(values.target, 8)} · R:R {Number(values.rr).toFixed(2)}
-          <div className="calculator-confirm-list">{orderRows.map((row) => <div key={`confirm-${row.account.id}`}><span>{row.account.name}</span><span>{row.riskPercent}% · {money(row.riskAmount)} · {copy.qty} {num(row.positionSize, 8)}</span></div>)}</div>
+          {postOnly && <><b>Post-Only</b><br /></>}{t('Entry')} {num(values.entry, 8)} · SL {num(values.stop, 8)} · TP {num(values.target, 8)} · R:R {Number(values.rr).toFixed(2)}
+          <div className="calculator-confirm-list">{orderRows.map((row) => <div key={`confirm-${row.account.id}`}><span>{row.account.name}</span><span>{row.riskPercent}% · {money(row.finance?.totalLoss || 0)} · {copy.qty} {num(row.positionSize, 8)} · Net R:R 1:{row.finance?.netRR.toFixed(2) ?? '—'}</span></div>)}</div>
         </div>}
       />
     </aside>

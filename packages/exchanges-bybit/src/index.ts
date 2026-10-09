@@ -1,5 +1,5 @@
 import { RestClientV5, WebsocketClient } from 'bybit-api';
-import { isRealTradeExecution, type AccountId, type ExchangeCapabilities, type TradeExecution, type TradeOrder, type TradePosition } from '@trade/shared';
+import { DEFAULT_FEE_RATES, isRealTradeExecution, type AccountFeeRates, type AccountId, type ExchangeCapabilities, type TradeExecution, type TradeOrder, type TradePosition } from '@trade/shared';
 import type { ExchangeAccountResolver, ExchangeAccountRuntime } from '@trade/exchanges-core';
 
 const num=(v:unknown)=>{const n=Number(v);return Number.isFinite(n)?n:0};
@@ -58,7 +58,8 @@ export class BybitAdapter {
   readonly capabilities:ExchangeCapabilities={market:true,limit:true,stop:true,reduceOnly:true,hedgeMode:true,tpsl:true,trailingStop:true,privateWebsocket:true};
   private readonly publicClient=new RestClientV5();
   private readonly privateClients=new Map<number,RestClientV5>();
-  private readonly instrumentCache=new Map<string,{tickSize:string;qtyStep:string;at:number}>();
+  private readonly instrumentCache=new Map<string,{tickSize:string;qtyStep:string;minOrderQty:string;minNotionalValue:string;at:number}>();
+  private readonly feeCache=new Map<string,{at:number;value:Promise<AccountFeeRates>}>();
 
   constructor(private readonly resolveAccount:ExchangeAccountResolver){}
 
@@ -81,12 +82,42 @@ export class BybitAdapter {
   createPublicWebsocket(){return new WebsocketClient();}
   createPrivateWebsocket(accountId:AccountId){const a=this.getAccount(accountId);return new WebsocketClient({key:a.apiKey,secret:a.apiSecret,demoTrading:a.demo});}
 
+  async getFeeRates(accountId: AccountId, symbol: string): Promise<AccountFeeRates> {
+    const account = this.getAccount(accountId);
+    const instrument = symbol.toUpperCase();
+    const key = `${accountId}:${instrument}`;
+    const cached = this.feeCache.get(key);
+    if (cached && Date.now() - cached.at < 30 * 60_000) return cached.value;
+    const value = (async (): Promise<AccountFeeRates> => {
+      const fallback: AccountFeeRates = { ...DEFAULT_FEE_RATES, accountId, symbol: instrument, source: 'fallback', fetchedAt: Date.now() };
+      // Demo fee-rate support is not reliable. Do not spend a private request on it.
+      if (account.demo) return fallback;
+      try {
+        const res = await this.getPrivateClient(accountId).getFeeRate({ category: 'linear', symbol: instrument });
+        const row = res.result?.list?.find(item => item.symbol === instrument);
+        const maker = Number(row?.makerFeeRate), taker = Number(row?.takerFeeRate);
+        if (res.retCode !== 0 || !row || ![row.makerFeeRate, row.takerFeeRate].every(v => typeof v === 'string' && v.trim() !== '')
+          || ![maker, taker].every(v => Number.isFinite(v) && v >= 0 && v <= 0.01)) return fallback;
+        return { ...fallback, maker, taker, source: 'exchange', fetchedAt: Date.now() };
+      } catch {
+        // Never return/log the SDK error: it may contain signed request headers.
+        return fallback;
+      }
+    })();
+    if (this.feeCache.size >= 1000) {
+      const oldest = this.feeCache.keys().next().value;
+      if (oldest !== undefined) this.feeCache.delete(oldest);
+    }
+    this.feeCache.set(key, { at: Date.now(), value });
+    return value;
+  }
+
   async getInstrumentRules(symbol:string){
     const key=symbol.toUpperCase();const cached=this.instrumentCache.get(key);if(cached&&Date.now()-cached.at<10*60_000)return cached;
     const res=await this.publicClient.getInstrumentsInfo({category:'linear',symbol:key,status:'Trading'} as any);
     if(res.retCode!==0)throw new Error(res.retMsg||'Instrument info error');
     const x=(res.result.list as any[])?.[0];if(!x)throw new Error(`Instrument ${key} not found`);
-    const rules={tickSize:String(x.priceFilter.tickSize),qtyStep:String(x.lotSizeFilter.qtyStep),at:Date.now()};this.instrumentCache.set(key,rules);return rules;
+    const rules={tickSize:String(x.priceFilter.tickSize),qtyStep:String(x.lotSizeFilter.qtyStep),minOrderQty:String(x.lotSizeFilter.minOrderQty),minNotionalValue:String(x.lotSizeFilter.minNotionalValue ?? '0'),at:Date.now()};this.instrumentCache.set(key,rules);return rules;
   }
   async normalizeQty(symbol:string,value:number){const r=await this.getInstrumentRules(symbol);return align(value,r.qtyStep,'floor');}
   async normalizePrice(symbol:string,value:number){const r=await this.getInstrumentRules(symbol);return align(value,r.tickSize,'round');}

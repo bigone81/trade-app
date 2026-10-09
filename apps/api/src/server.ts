@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { detectLevels } from '@trade/domain';
 import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, createRulerMeasurement, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, deleteRulerMeasurement, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, listRulerMeasurements, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRulerMeasurement, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { appConfig } from './config.js';
+import { tradeOrderSchema, checkNormalizedOrderRisk, orderTimeInForce } from './order-risk.js';
 import { registerMarketMonitorRoutes } from './market-monitor.js';
 import { registerMarketRetention } from './market-retention.js';
 import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
@@ -178,6 +179,10 @@ app.get('/api/trade/balances',async(req)=>{
     catch(e){return {accountId:id,accountName:account?.name,exchange:account?.exchange,online:false,error:e instanceof Error?e.message:String(e)};}
   }));
 });
+app.get('/api/trade/fee-rates',async(req)=>{
+  const q=z.object({accountId:z.coerce.number().int().positive(),symbol:z.string().regex(/^[A-Z0-9]{2,30}$/)}).parse(req.query);
+  return adapterFor(q.accountId).getFeeRates(q.accountId,q.symbol);
+});
 app.get('/api/trade/positions',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getPositions(id).catch(()=>[])))).flat();});
 app.get('/api/trade/orders',async(req)=>{const ids=await accountIds((req.query as any)?.accountId);return (await Promise.all(ids.map(id=>adapterFor(id).getOrders(id,false).catch(()=>[])))).flat();});
 app.get('/api/trade/executions',async(req)=>{
@@ -307,12 +312,7 @@ app.post('/api/trade/position/flatten',async(req,reply)=>{
 
 app.post('/api/trade/order',async(req,reply)=>{
   if(!requireLive(reply))return;
-  const b=z.object({
-    accountId:z.number().int().positive(),symbol:z.string(),side:z.enum(['Buy','Sell']),orderType:z.enum(['Market','Limit']),qty:z.number().positive(),
-    executionMode:z.enum(['market','limit','stop_market','stop_limit']).optional(),autoMode:z.boolean().optional(),autoReferencePrice:z.number().positive().optional(),
-    price:z.number().positive().optional(),triggerPrice:z.number().positive().optional(),stopLoss:z.number().positive().optional(),takeProfit:z.number().positive().optional(),positionIdx:z.number().int().default(0),
-    pointType:z.number().int().optional(),priceLevel:z.number().positive().optional(),plannedRr:z.number().optional(),riskPercent:z.number().min(0).optional(),riskAmount:z.number().min(0).optional(),plannedEntry:z.number().positive().optional()
-  }).parse(req.body);
+  const b=tradeOrderSchema.parse(req.body);
   const account=accountById(b.accountId);const adapter=adapterFor(b.accountId);
   const symbol=b.symbol.toUpperCase();const qty=await adapter.normalizeQty(symbol,b.qty);if(Number(qty)<=0)return reply.code(400).send({error:'Position quantity is below instrument qtyStep'});
   const executionMode=b.executionMode ?? (b.triggerPrice ? (b.orderType==='Market'?'stop_market':'stop_limit') : (b.orderType==='Market'?'market':'limit'));
@@ -330,15 +330,18 @@ app.post('/api/trade/order',async(req,reply)=>{
   const orderType=executionMode==='market'||executionMode==='stop_market'?'Market':'Limit';
   const needsLimitPrice=executionMode==='limit'||executionMode==='stop_limit';
   const needsTrigger=executionMode==='stop_market'||executionMode==='stop_limit';
-  const params:any={symbol,side:b.side,orderType,qty,positionIdx:b.positionIdx,timeInForce:'GTC',orderLinkId:`tradev2-${Date.now()}`};
+  const params:any={symbol,side:b.side,orderType,qty,positionIdx:b.positionIdx,timeInForce:orderTimeInForce(executionMode,b.postOnly),orderLinkId:`tradev2-${Date.now()}`};
   if(needsLimitPrice){if(!b.price)return reply.code(400).send({error:'Limit price is required'});params.price=await adapter.normalizePrice(symbol,b.price);}
   if(needsTrigger){if(!b.triggerPrice)return reply.code(400).send({error:'Trigger price is required'});params.triggerPrice=await adapter.normalizePrice(symbol,b.triggerPrice);params.triggerDirection=b.side==='Buy'?1:2;}
   if(b.stopLoss)params.stopLoss=await adapter.normalizePrice(symbol,b.stopLoss);if(b.takeProfit)params.takeProfit=await adapter.normalizePrice(symbol,b.takeProfit);
+  let plannedRisk = null;
+  try { plannedRisk = await checkNormalizedOrderRisk(b, executionMode, params, adapter); }
+  catch (error) { return reply.code(400).send({error: error instanceof Error ? error.message : 'Invalid planned risk.'}); }
   const r=await adapter.submitOrder(b.accountId,params);
   appendSystemEvent(db,{eventType:'order.submit.requested',accountId:b.accountId,symbol,message:'Order submit requested',payload:{exchange:account.exchange,executionMode,autoMode:Boolean(b.autoMode),retCode:r.retCode,retMsg:r.retMsg,orderLinkId:params.orderLinkId}});
   if(!exchangeOk(reply,r))return;
   const journalOrderType=executionMode==='stop_market'?'Stop Market':executionMode==='stop_limit'?'Stop Limit':orderType;
-  upsertJournalSubmittedOrder(db,{accountId:b.accountId,accountName:account.name,symbol,side:b.side,orderType:journalOrderType,triggerPrice:needsTrigger?(b.triggerPrice??null):null,entryPrice:b.plannedEntry??b.price??b.autoReferencePrice??null,stopLoss:b.stopLoss??null,takeProfit:b.takeProfit??null,quantity:Number(qty),pointType:b.pointType??null,priceLevel:b.priceLevel??null,rr:0,riskPercent:b.riskPercent??null,riskAmount:b.riskAmount??null,exchangeOrderId:String((r as any)?.result?.orderId||'')||null,orderLinkId:params.orderLinkId,reduceOnly:false,raw:{request:b,resolvedExecutionMode:executionMode,response:{retCode:r.retCode,retMsg:r.retMsg,result:(r as any).result}}});
+  upsertJournalSubmittedOrder(db,{accountId:b.accountId,accountName:account.name,symbol,side:b.side,orderType:journalOrderType,triggerPrice:needsTrigger?(b.triggerPrice??null):null,entryPrice:b.plannedEntry??b.price??b.autoReferencePrice??null,stopLoss:b.stopLoss??null,takeProfit:b.takeProfit??null,quantity:Number(params.qty),pointType:b.pointType??null,priceLevel:b.priceLevel??null,rr:0,riskPercent:b.riskPercent??null,riskAmount:b.riskAmount??null,exchangeOrderId:String((r as any)?.result?.orderId||'')||null,orderLinkId:params.orderLinkId,reduceOnly:false,raw:{request:b,plannedRisk,resolvedExecutionMode:executionMode,response:{retCode:r.retCode,retMsg:r.retMsg,result:(r as any).result}}});
   return r;
 });
 

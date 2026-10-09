@@ -1,4 +1,5 @@
-import type { AccountPublic } from '@trade/shared';
+import type { AccountPublic, EntryFeeMode, FeeLiquidity, FeeRates } from '@trade/shared';
+import { isValidFeeRate } from '@trade/domain';
 import { useEffect, useState } from 'react';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -15,6 +16,14 @@ export interface AppPreferences {
   accountRiskPercent: Record<string, number | null>;
   riskBase: 'equity' | 'wallet' | 'fixed';
   fixedAccountSize: Record<string, number | null>;
+  calculatorFees: {
+    includeFees: boolean;
+    entryMode: EntryFeeMode;
+    manualEntry: FeeLiquidity;
+    postOnly: boolean;
+    manualRates: FeeRates | null;
+    accountRates: Record<string, FeeRates>;
+  };
   manualLevel: {
     colorMode: 'auto' | 'custom';
     color: string;
@@ -81,6 +90,7 @@ export const defaultPreferences: AppPreferences = {
   accountRiskPercent: {},
   riskBase: 'equity',
   fixedAccountSize: {},
+  calculatorFees: { includeFees: true, entryMode: 'auto', manualEntry: 'maker', postOnly: false, manualRates: null, accountRates: {} },
   manualLevel: {
     colorMode: 'auto',
     color: '#64748b',
@@ -136,10 +146,24 @@ export const defaultPreferences: AppPreferences = {
   },
 };
 
+function normalizeFees(raw?: Partial<AppPreferences['calculatorFees']>): AppPreferences['calculatorFees'] {
+  const validRates = (rates: FeeRates | null | undefined): rates is FeeRates =>
+    !!rates && isValidFeeRate(rates.maker) && isValidFeeRate(rates.taker);
+  return {
+    includeFees: typeof raw?.includeFees === 'boolean' ? raw.includeFees : true,
+    entryMode: raw?.entryMode === 'manual' ? 'manual' : 'auto',
+    manualEntry: raw?.manualEntry === 'taker' ? 'taker' : 'maker',
+    postOnly: raw?.postOnly === true,
+    manualRates: validRates(raw?.manualRates) ? raw.manualRates : null,
+    accountRates: Object.fromEntries(Object.entries(raw?.accountRates || {}).filter(([, rates]) => validRates(rates))),
+  };
+}
+
 function mergePreferences(raw: Partial<AppPreferences> | null): AppPreferences {
   return {
     ...defaultPreferences,
     ...(raw || {}),
+    calculatorFees: normalizeFees(raw?.calculatorFees),
     accountRiskPercent: { ...defaultPreferences.accountRiskPercent, ...(raw?.accountRiskPercent || {}) },
     fixedAccountSize: { ...defaultPreferences.fixedAccountSize, ...(raw?.fixedAccountSize || {}) },
     manualLevel: { ...defaultPreferences.manualLevel, ...(raw?.manualLevel || {}) },

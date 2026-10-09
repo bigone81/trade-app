@@ -7,6 +7,18 @@ export type AccountId = number;
 export type Side = 'Buy' | 'Sell';
 export type Direction = 'long' | 'short';
 export type OrderKind = 'Market' | 'Limit';
+export type ExecutionMode = 'market' | 'limit' | 'stop_market' | 'stop_limit';
+export type EntryFeeMode = 'auto' | 'manual';
+export type FeeLiquidity = 'maker' | 'taker';
+/** Decimal rates, not percentages. */
+export interface FeeRates { maker: number; taker: number; }
+export const DEFAULT_FEE_RATES: Readonly<FeeRates> = { maker: 0.0002, taker: 0.00055 };
+export interface AccountFeeRates extends FeeRates {
+  accountId: number;
+  symbol: string;
+  source: 'exchange' | 'fallback';
+  fetchedAt: number;
+}
 export type CalculatorMode = 'stop' | 'limit' | 'market';
 export type StopMode = 'atr' | 'technical';
 export type DrawingTool = 'select' | 'level' | 'risk-reward' | 'alert' | 'measure';
