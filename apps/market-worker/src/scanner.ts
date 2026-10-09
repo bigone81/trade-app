@@ -1,6 +1,7 @@
 import { detectLevels, analyzeMarket, marketAtr, clusterLevels, advanceMarketState, priorityRank, selectMarketUniverse, formatMarketNotification } from '@trade/domain';
 import { attachMarketNotification, createNotification, deliverNotificationTelegram, getManualLevelSymbols, getMarketClusters, getMarketSettings, getMarketStates, getMarketSymbols, getMarketWatchlist, getNotificationSettings, insertMarketObservation, listManualLevels, pruneMarketUniverse, saveMarketState, saveMarketSymbol, type SqliteDb } from '@trade/database';
 import type { Candle, MarketMonitorSettings, MarketMonitorStatus, MarketObservation, MarketSymbol, MonitorLevel } from '@trade/shared';
+import { formatTelegramMarketNotification } from './telegram-message.js';
 
 export interface PublicMarketData {
   getCandles(symbol: string, interval: string, limit: number): Promise<Candle[]>;
@@ -32,7 +33,7 @@ export class MarketScanner {
   private universe: ReturnType<typeof selectMarketUniverse> = [];
   private universeAt = 0;
   private universeSignature = '';
-  constructor(private db: SqliteDb, private data: PublicMarketData) {}
+  constructor(private db: SqliteDb, private data: PublicMarketData, private publicAppUrl = process.env.PUBLIC_APP_URL ?? '') {}
 
   private async cachedCandles(symbol: string, interval: string, limit: number, periodSeconds: number, now: number) {
     const key = `${symbol}:${interval}:${limit}`, bucket = Math.floor(now / 1000 / periodSeconds);
@@ -82,19 +83,21 @@ export class MarketScanner {
         if (!getMarketSettings(this.db).enabled) return;
         const row = this.universe[index++]!;
         try {
+          // Auto membership includes the exit threshold; watchlist is an explicit override.
+          const includeAutoLevels = row.sources.includes('auto') || row.sources.includes('watchlist') || row.turnover >= settings.minTurnover;
           const [rawM5, rawH1, rawH4, historicalDaily, chartDaily] = await Promise.all([
             this.cachedCandles(row.symbol, '5', 310, 300, now),
             this.cachedCandles(row.symbol, '60', 80, 3600, now),
             this.cachedCandles(row.symbol, '240', 80, 14400, now),
             this.cachedCandles(row.symbol, 'D', 400, 86400, now),
             // The chart includes the open D1 candle. Refresh exactly its 30-bar input once per M5 scan.
-            this.cachedCandles(row.symbol, 'D', 30, 300, now),
+            includeAutoLevels ? this.cachedCandles(row.symbol, 'D', 30, 300, now) : Promise.resolve([]),
           ]);
           const m5 = closed(rawM5, 300), h1 = closed(rawH1, 3600), h4 = closed(rawH4, 14400), daily = closed(historicalDaily, 86400);
           if (m5.at(-1)?.time !== barTime || m5.length < 30 || m5.slice(-30).some((x, i, a) => i > 0 && x.time - a[i - 1]!.time !== 300)) throw new Error('Missing or stale closed M5 candles');
           const atr = marketAtr(m5);
           if (atr <= 0) throw new Error('Insufficient ATR history');
-          const auto = detectLevels(chartDaily);
+          const auto = includeAutoLevels ? detectLevels(chartDaily) : { limitLevels: [], mirrorLevels: [] };
           const levels: MonitorLevel[] = [...auto.limitLevels, ...auto.mirrorLevels].map(x => ({ ...x, id: `auto:${x.type}:${x.price}` }));
           levels.push(...listManualLevels(this.db, row.symbol).map(x => ({ id: `manual:${x.id}`, price: x.price, type: 'manual' as const, touches: 0, strength: 0, dates: [] })));
           const clusters = clusterLevels(levels, atr, settings.levelClusterAtr, getMarketClusters(this.db, row.symbol));
@@ -110,8 +113,7 @@ export class MarketScanner {
             if (result.notification) {
               const current = getMarketSettings(this.db), global = getNotificationSettings(this.db);
               const allowed = current.enabled && current.telegramEnabled && global.telegramMarket && priorityRank(observation.scores.priority) >= priorityRank(current.minPriority) && ['FAST_APPROACH', 'BREAKOUT_SETUP', 'REJECTION_SETUP'].includes(observation.scenario!);
-              const escape = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-              await deliverNotificationTelegram(this.db, result.notification, escape(formatMarketNotification(observation, global.language)), allowed);
+              await deliverNotificationTelegram(this.db, result.notification, formatTelegramMarketNotification(observation, global.language, this.publicAppUrl), allowed);
               const sent = this.db.prepare('SELECT telegram_status FROM notifications WHERE id=?').get(result.notification.id) as { telegram_status: string };
               if (sent.telegram_status === 'sent') alertsSent++;
             }
