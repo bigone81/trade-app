@@ -26,5 +26,7 @@ test('Telegram formatter escapes HTML and omits a link when the public URL is no
   const message = formatTelegramMarketNotification({ ...observation, symbol: 'A&B<USDT>' }, 'ru', '');
   assert.ok(message.startsWith('A&amp;B&lt;USDT&gt;'));
   assert.ok(!message.includes('<a '));
-  assert.throws(() => formatTelegramMarketNotification(observation, 'en', 'javascript:alert(1)'), /HTTP or HTTPS/);
+  for (const invalid of ['=https://edgedesk.example', 'javascript:alert(1)', 'invalid']) {
+    assert.equal(formatTelegramMarketNotification(observation, 'en', invalid), formatTelegramMarketNotification(observation, 'en', ''));
+  }
 });

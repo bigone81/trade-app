@@ -6,8 +6,10 @@ const escapeHtml = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<
 export function formatTelegramMarketNotification(observation: MarketObservation, language: 'en' | 'ru' | 'uk', publicAppUrl: string) {
   const message = escapeHtml(formatMarketNotification(observation, language));
   if (!publicAppUrl.trim()) return message;
-  const url = new URL(publicAppUrl);
-  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('PUBLIC_APP_URL must use HTTP or HTTPS');
+  // A broken optional link must not discard an otherwise valid market alert.
+  let url: URL;
+  try { url = new URL(publicAppUrl); } catch { return message; }
+  if (!['http:', 'https:'].includes(url.protocol)) return message;
   url.pathname = `${url.pathname.replace(/\/$/, '')}/`;
   url.search = new URLSearchParams({ symbol: observation.symbol, level: String(observation.cluster.price) }).toString();
   url.hash = '';
