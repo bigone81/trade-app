@@ -5,6 +5,7 @@ import type { AlertRecord, ManualLevel, RiskReward, RulerMeasurement } from '@tr
 import { isRealTradeExecution } from '@trade/shared';
 import { initializeMarketMonitor } from './market-monitor.js';
 export * from './market-monitor.js';
+export * from './market-retention.js';
 export * from './telegram.js';
 
 export type SqliteDb = DatabaseSync;

@@ -9,10 +9,13 @@ import { detectLevels } from '@trade/domain';
 import { appendSystemEvent, countUnreadNotifications, createAlert, createNotification, createJournalImage, createManualLevel, createRiskReward, createRulerMeasurement, deleteAlert, deleteJournalImage, deleteManualLevel, deleteRiskReward, deleteRulerMeasurement, getJournalImage, getNotificationSettings, listAlerts, listJournal, listJournalImages, listJournalPage, listManualLevels, listNotifications, listRiskRewards, listRulerMeasurements, markAllNotificationsRead, markNotificationRead, markNotificationTelegram, openDatabase, setAlertActive, updateAlertPrice, updateManualLevel, updateNotificationSettings, updateRulerMeasurement, updateRiskReward, updateJournalOrder, upsertJournalSubmittedOrder } from '@trade/database';
 import { appConfig } from './config.js';
 import { registerMarketMonitorRoutes } from './market-monitor.js';
+import { registerMarketRetention } from './market-retention.js';
 import { BybitAdapter, createEnvBybitResolver, discoverBybitAccounts } from '@trade/exchanges-bybit';
 
 const app=Fastify({logger:{redact:['req.headers.authorization','*.key','*.secret','*.apiKey','*.apiSecret']}});
 const db=openDatabase(appConfig.databasePath);
+registerMarketRetention(app, appConfig.databasePath);
+app.addHook('onClose', async () => { db.close(); });
 mkdirSync(appConfig.chartsDir,{recursive:true});
 
 const runtimeAccounts=discoverBybitAccounts(process.env);
@@ -348,3 +351,10 @@ app.setNotFoundHandler((req,reply)=>{if(req.url.startsWith('/api/'))return reply
 app.setErrorHandler((error,_req,reply)=>{app.log.error(error);const status=(error as any).name==='ZodError'?400:500;reply.code(status).send({error:status===400?'Invalid request':'Server error',details:status===400?(error as any).issues:undefined});});
 
 await app.listen({host:'0.0.0.0',port:appConfig.port});
+let stopping = false;
+const shutdown = () => {
+  if (stopping) return;
+  stopping = true;
+  void app.close().catch(() => { app.log.error('API shutdown failed'); process.exitCode = 1; });
+};
+for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, shutdown);
