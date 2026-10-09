@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 from decimal import Decimal
 from pathlib import Path
 
@@ -34,15 +35,14 @@ def load_env(path):
     return values
 
 
-def get_fees(key, secret, symbol, demo):
+def signed_get(key, secret, query, path, demo):
     host = "https://api-demo.bybit.com" if demo else "https://api.bybit.com"
-    query = f"category=linear&symbol={symbol}"
     timestamp = str(int(time.time() * 1000))
     window = "5000"
     message = f"{timestamp}{key}{window}{query}".encode("utf-8")
     signature = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
     request = urllib.request.Request(
-        f"{host}/v5/account/fee-rate?{query}",
+        f"{host}{path}?{query}",
         headers={
             "X-BAPI-API-KEY": key,
             "X-BAPI-TIMESTAMP": timestamp,
@@ -54,11 +54,54 @@ def get_fees(key, secret, symbol, demo):
         data = json.load(response)
     if data.get("retCode") != 0:
         raise ValueError(f"Bybit {data.get('retCode')}: {data.get('retMsg')}")
-    items = data.get("result", {}).get("list", [])
+    return data.get("result", {}).get("list", [])
+
+
+def get_fees(key, secret, symbol):
+    items = signed_get(key, secret, f"category=linear&symbol={symbol}", "/v5/account/fee-rate", False)
     if not items:
         raise ValueError("Bybit не вернул комиссии для выбранной пары")
     item = items[0]
     return Decimal(item["makerFeeRate"]) * 100, Decimal(item["takerFeeRate"]) * 100
+
+
+def print_demo_fees(key, secret, symbol):
+    # Demo Trading does not support /v5/account/fee-rate.
+    # Execution history does contain fees for past fills.
+    items = signed_get(key, secret, f"category=linear&symbol={symbol}&limit=100",
+                       "/v5/execution/list", True)
+    trades = [item for item in items if item.get("execType") == "Trade"]
+    if not trades:
+        items = signed_get(key, secret, "category=linear&limit=100",
+                           "/v5/execution/list", True)
+        trades = [item for item in items if item.get("execType") == "Trade"]
+        if trades:
+            print(f"  Нет исполнений {symbol}; показаны другие пары.")
+    if not trades:
+        print("  В истории Demo нет исполненных фьючерсных сделок.")
+        print("  Комиссия неизвестна. Новые ордера не создавались.")
+        return
+    print("  Ставки по последним исполненным сделкам DEMO (не тариф LIVE):")
+    recent = {}
+    for item in trades:
+        is_maker = item.get("isMaker")
+        if type(is_maker) is not bool:
+            continue
+        label = "Maker" if is_maker else "Taker"
+        if label in recent:
+            continue
+        try:
+            rate = Decimal(item["feeRate"]) * 100
+        except (KeyError, ArithmeticError, TypeError):
+            continue
+        recent[label] = rate
+        print(f"  {label}: {rate}% (пара {item.get('symbol', '?')})")
+    for label in ("Maker", "Taker"):
+        if label not in recent:
+            print(f"  {label}: нет примера среди последних {len(trades)} исполнений")
+    if "Taker" in recent:
+        print(f"  Taker вход + выход: ≈ {recent['Taker'] * 2}% (оценка по истории)")
+    print("  Внимание: комиссия Demo может отличаться от реального аккаунта.")
 
 
 def main():
@@ -93,14 +136,15 @@ def main():
             had_error = True
             continue
         try:
-            maker, taker = get_fees(key, secret, symbol, demo)
-            print(f"  Maker: {maker}%")
-            print(f"  Taker: {taker}%")
-            print(f"  Taker вход + выход: ≈ {taker * 2}%")
+            if demo:
+                print_demo_fees(key, secret, symbol)
+            else:
+                maker, taker = get_fees(key, secret, symbol)
+                print(f"  Maker: {maker}%")
+                print(f"  Taker: {taker}%")
+                print(f"  Taker вход + выход: ≈ {taker * 2}%")
         except (ValueError, KeyError, urllib.error.URLError, TimeoutError) as exc:
             print(f"  Ошибка запроса: {exc}")
-            if demo:
-                print("  Примечание: endpoint комиссий может быть недоступен в Demo Trading.")
             had_error = True
     return 1 if had_error else 0
 
